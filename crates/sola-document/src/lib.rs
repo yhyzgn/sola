@@ -151,6 +151,27 @@ impl DocumentModel {
         self.set_focused_draft(next)
     }
 
+    pub fn push_char_to_focused_draft(&mut self, ch: char) -> bool {
+        let Some(current) = self.focused_text().map(ToOwned::to_owned) else {
+            return false;
+        };
+
+        let next = format!("{current}{ch}");
+        self.set_focused_draft(next)
+    }
+
+    pub fn delete_last_char_from_focused_draft(&mut self) -> bool {
+        let Some(current) = self.focused_text().map(ToOwned::to_owned) else {
+            return false;
+        };
+
+        let Some((next, _)) = current.char_indices().next_back() else {
+            return false;
+        };
+
+        self.set_focused_draft(current[..next].to_string())
+    }
+
     pub fn revert_focused_draft(&mut self) -> bool {
         let Some(block) = self.focused_block_mut() else {
             return false;
@@ -622,6 +643,17 @@ fn main() {}
         assert!(document.focused_has_draft());
         assert!(document.revert_focused_draft());
         assert!(!document.focused_has_draft());
+        assert_eq!(document.focused_text(), Some("Paragraph"));
+    }
+
+    #[test]
+    fn focused_draft_can_be_typed_and_backspaced() {
+        let mut document = DocumentModel::from_markdown("# Title\n\nParagraph");
+
+        assert!(document.focus_block(1));
+        assert!(document.push_char_to_focused_draft('!'));
+        assert_eq!(document.focused_text(), Some("Paragraph!"));
+        assert!(document.delete_last_char_from_focused_draft());
         assert_eq!(document.focused_text(), Some("Paragraph"));
     }
 

@@ -93,3 +93,22 @@ timeout 10s cargo run
 ```
 
 结果：全部通过。
+
+## 增量验证（键盘驱动 focused draft 编辑）
+
+本轮新增：
+
+- focused block 通过 `FocusHandle` 获得键盘焦点
+- `on_key_down` 处理普通字符、Backspace、Enter、Escape、Ctrl/Cmd+S
+- 文档层新增字符追加与退格能力
+
+重新执行：
+
+```bash
+cargo fmt --all
+cargo check
+cargo test --workspace
+timeout 10s cargo run
+```
+
+结果：全部通过。

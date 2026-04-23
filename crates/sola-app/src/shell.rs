@@ -1,7 +1,7 @@
 use gpui::{
-    AppContext, Application, Bounds, Context, Div, FontWeight, Hsla, InteractiveElement,
-    IntoElement, ParentElement, Render, Styled, Window, WindowBounds, WindowOptions, div, px, rgb,
-    size,
+    AppContext, Application, Bounds, Context, Div, FocusHandle, FontWeight, Hsla,
+    InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, WindowBounds,
+    WindowOptions, div, px, rgb, size,
 };
 use sola_core::{APP_NAME, APP_TAGLINE, ROADMAP_PHASES, sample_markdown};
 use sola_document::{BlockKind, DocumentBlock, DocumentModel};
@@ -32,13 +32,14 @@ pub fn run() {
                 ))),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|_| SolaRoot::new()),
+            |_window, cx| cx.new(|cx| SolaRoot::new(cx)),
         )
         .expect("open GPUI window");
     });
 }
 
 struct SolaRoot {
+    focus_handle: FocusHandle,
     theme_mode: ThemeMode,
     theme: Theme,
     document: DocumentModel,
@@ -51,8 +52,9 @@ enum ThemeMode {
 }
 
 impl SolaRoot {
-    fn new() -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
         Self {
+            focus_handle: cx.focus_handle(),
             theme_mode: ThemeMode::Dark,
             theme: Theme::sola_dark(),
             document: DocumentModel::from_markdown(sample_markdown()),
@@ -465,12 +467,20 @@ impl SolaRoot {
                 )
                 .child(self.render_blurred_content(block));
         } else {
+            card = card.track_focus(&self.focus_handle);
             card = card.child(self.render_blurred_content(block));
         }
 
+        card = card.on_key_down(cx.listener(|this, event, _window, cx| {
+            if this.handle_focused_key_down(event) {
+                cx.notify();
+            }
+        }));
+
         card.interactivity()
-            .on_click(cx.listener(move |this, _event, _window, cx| {
+            .on_click(cx.listener(move |this, _event, window, cx| {
                 if this.document.focus_block(index) {
+                    window.focus(&this.focus_handle);
                     cx.notify();
                 }
             }));
@@ -549,6 +559,43 @@ impl SolaRoot {
                         .child(block.rendered.clone()),
                 ),
         }
+    }
+}
+
+impl SolaRoot {
+    fn handle_focused_key_down(&mut self, event: &gpui::KeyDownEvent) -> bool {
+        let key = event.keystroke.key.as_str();
+        let modifiers = &event.keystroke.modifiers;
+        let primary = modifiers.control || modifiers.platform;
+
+        if primary && key.eq_ignore_ascii_case("s") {
+            return self.document.apply_focused_draft();
+        }
+
+        if key.eq_ignore_ascii_case("escape") {
+            return self.document.revert_focused_draft();
+        }
+
+        if key.eq_ignore_ascii_case("backspace") {
+            return self.document.delete_last_char_from_focused_draft();
+        }
+
+        if key.eq_ignore_ascii_case("enter") {
+            return self.document.push_char_to_focused_draft('\n');
+        }
+
+        if !modifiers.control && !modifiers.alt && !modifiers.platform {
+            if let Some(ch) = event.keystroke.key_char.as_deref() {
+                let mut chars = ch.chars();
+                if let Some(single) = chars.next() {
+                    if chars.next().is_none() {
+                        return self.document.push_char_to_focused_draft(single);
+                    }
+                }
+            }
+        }
+
+        false
     }
 }
 

@@ -69,3 +69,18 @@
    - `cargo check`
    - `cargo test --workspace`
    - `timeout 10s cargo run`
+17. 继续推进 focused block 的键盘驱动编辑：
+   - 查阅 GPUI 本地源码，确认 `KeyDownEvent` / `track_focus` / `FocusHandle` 的接入方式
+   - `sola-document` 新增 `push_char_to_focused_draft` / `delete_last_char_from_focused_draft`
+   - `sola-app` 为 focused block 接入 `track_focus` 与 `on_key_down`
+   - 键盘映射支持：
+     - 普通字符 -> 追加到 focused draft
+     - Backspace -> 删除最后字符
+     - Enter -> 插入换行
+     - Escape -> revert draft
+     - Ctrl/Cmd+S -> apply draft
+18. 本轮修改后再次完成强校验：
+   - `cargo fmt --all`
+   - `cargo check`
+   - `cargo test --workspace`
+   - `timeout 10s cargo run`
