@@ -305,7 +305,10 @@ impl SolaRoot {
                             .flex()
                             .flex_col()
                             .gap(px(8.0))
-                            .child(section_title("Dual-state engine prototype", &self.theme))
+                            .child(section_title(
+                                "Dual-state engine prototype",
+                                &self.theme,
+                            ))
                             .child(
                                 div()
                                     .text_size(px(14.0))
@@ -334,13 +337,12 @@ impl SolaRoot {
                                     .child(duplicate_button)
                                     .child(delete_button),
                             )
-                            .child(
-                                pill(
-                                    "source state",
-                                    draft_label.to_string(),
-                                    &self.theme,
-                                ),
-                            ),
+                            .child(pill(
+                                "source state",
+                                draft_label.to_string(),
+                                &self.theme,
+                            ))
+                            .child(shortcut_legend(&self.theme)),
                     ),
             )
             .child(blocks)
@@ -568,6 +570,33 @@ impl SolaRoot {
         let modifiers = &event.keystroke.modifiers;
         let primary = modifiers.control || modifiers.platform;
 
+        if primary && key.eq_ignore_ascii_case("t") {
+            self.toggle_theme();
+            return true;
+        }
+
+        if modifiers.alt && key.eq_ignore_ascii_case("up") {
+            return self.document.focus_previous();
+        }
+
+        if modifiers.alt && key.eq_ignore_ascii_case("down") {
+            return self.document.focus_next();
+        }
+
+        if primary && key.eq_ignore_ascii_case("n") {
+            return self.document.insert_paragraph_after_focused(
+                "Inserted via keyboard shortcut as a structure-editing prototype.",
+            );
+        }
+
+        if primary && key.eq_ignore_ascii_case("d") {
+            return self.document.duplicate_focused_block();
+        }
+
+        if primary && key.eq_ignore_ascii_case("backspace") {
+            return self.document.delete_focused_block();
+        }
+
         if primary && key.eq_ignore_ascii_case("s") {
             return self.document.apply_focused_draft();
         }
@@ -720,6 +749,48 @@ fn action_button(label: String, theme: &Theme, active: bool) -> Div {
         .text_size(px(12.0))
         .text_color(text)
         .child(label)
+}
+
+fn shortcut_legend(theme: &Theme) -> Div {
+    div()
+        .flex()
+        .flex_wrap()
+        .gap(px(8.0))
+        .child(shortcut_chip("Ctrl/Cmd+T", "toggle theme", theme))
+        .child(shortcut_chip("Alt+↑/↓", "move focus", theme))
+        .child(shortcut_chip("Ctrl/Cmd+N", "insert paragraph", theme))
+        .child(shortcut_chip("Ctrl/Cmd+D", "duplicate block", theme))
+        .child(shortcut_chip("Ctrl/Cmd+Backspace", "delete block", theme))
+        .child(shortcut_chip("Ctrl/Cmd+S", "apply draft", theme))
+        .child(shortcut_chip("Esc", "revert draft", theme))
+        .child(shortcut_chip("Backspace", "edit draft", theme))
+        .child(shortcut_chip("Enter", "newline in draft", theme))
+}
+
+fn shortcut_chip(key: &str, label: &str, theme: &Theme) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .px(px(10.0))
+        .py(px(6.0))
+        .bg(rgb_hex(&theme.palette.panel_background))
+        .rounded(px(999.0))
+        .border_1()
+        .border_color(rgb_hex(&theme.palette.panel_border))
+        .child(
+            div()
+                .text_size(px(11.0))
+                .font_weight(FontWeight::BOLD)
+                .text_color(rgb_hex(&theme.palette.text_primary))
+                .child(key.to_string()),
+        )
+        .child(
+            div()
+                .text_size(px(11.0))
+                .text_color(rgb_hex(&theme.palette.text_muted))
+                .child(label.to_string()),
+        )
 }
 
 fn truncate_for_pill(input: &str, max_chars: usize) -> String {

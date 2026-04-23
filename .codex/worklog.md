@@ -84,3 +84,13 @@
    - `cargo check`
    - `cargo test --workspace`
    - `timeout 10s cargo run`
+19. 继续推进快捷键命令面与操作提示：
+   - `sola-app` 支持 `Ctrl/Cmd+T` 切换主题
+   - `sola-app` 支持 `Alt+↑/↓` 切换 focused block
+   - `sola-app` 支持 `Ctrl/Cmd+N` 插入段落、`Ctrl/Cmd+D` 复制 block、`Ctrl/Cmd+Backspace` 删除 block
+   - `sola-app` 增加快捷键提示条
+20. 本轮修改后再次完成强校验：
+   - `cargo fmt --all`
+   - `cargo check`
+   - `cargo test --workspace`
+   - `timeout 10s cargo run`

@@ -112,3 +112,25 @@ timeout 10s cargo run
 ```
 
 结果：全部通过。
+
+## 增量验证（快捷键命令面）
+
+本轮新增：
+
+- Ctrl/Cmd+T 主题切换
+- Alt+↑/↓ focused block 切换
+- Ctrl/Cmd+N 插入段落
+- Ctrl/Cmd+D 复制 block
+- Ctrl/Cmd+Backspace 删除 block
+- 快捷键提示条
+
+重新执行：
+
+```bash
+cargo fmt --all
+cargo check
+cargo test --workspace
+timeout 10s cargo run
+```
+
+结果：全部通过。
