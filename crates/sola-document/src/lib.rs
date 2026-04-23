@@ -15,6 +15,7 @@ pub struct DocumentBlock {
     pub kind: BlockKind,
     pub source: String,
     pub rendered: String,
+    pub draft: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +82,10 @@ impl DocumentModel {
         self.blocks.get(self.focused_block)
     }
 
+    pub fn focused_block_mut(&mut self) -> Option<&mut DocumentBlock> {
+        self.blocks.get_mut(self.focused_block)
+    }
+
     pub fn block_count(&self) -> usize {
         self.blocks.len()
     }
@@ -109,6 +114,67 @@ impl DocumentModel {
         }
 
         self.focused_block -= 1;
+        true
+    }
+
+    pub fn focused_text(&self) -> Option<&str> {
+        let block = self.focused_block_ref()?;
+        Some(block.draft.as_deref().unwrap_or(&block.source))
+    }
+
+    pub fn focused_has_draft(&self) -> bool {
+        self.focused_block_ref()
+            .and_then(|block| block.draft.as_ref())
+            .is_some()
+    }
+
+    pub fn set_focused_draft(&mut self, draft: String) -> bool {
+        let Some(block) = self.focused_block_mut() else {
+            return false;
+        };
+
+        if draft == block.source {
+            block.draft = None;
+        } else {
+            block.draft = Some(draft);
+        }
+
+        true
+    }
+
+    pub fn append_to_focused_draft(&mut self, suffix: &str) -> bool {
+        let Some(current) = self.focused_text().map(ToOwned::to_owned) else {
+            return false;
+        };
+
+        let next = format!("{current}{suffix}");
+        self.set_focused_draft(next)
+    }
+
+    pub fn revert_focused_draft(&mut self) -> bool {
+        let Some(block) = self.focused_block_mut() else {
+            return false;
+        };
+
+        let had_draft = block.draft.is_some();
+        block.draft = None;
+        had_draft
+    }
+
+    pub fn apply_focused_draft(&mut self) -> bool {
+        let index = self.focused_block;
+        let Some(block) = self.blocks.get_mut(index) else {
+            return false;
+        };
+
+        let Some(draft) = block.draft.take() else {
+            return false;
+        };
+
+        block.source = draft;
+        block.rendered = render_block_source(&block.kind, &block.source);
+
+        self.rebuild_metadata();
         true
     }
 }
@@ -148,6 +214,7 @@ fn parse_blocks(source: &str) -> Vec<DocumentBlock> {
             kind: BlockKind::Paragraph,
             rendered: content.clone(),
             source: content,
+            draft: None,
         });
         paragraph_lines.clear();
     };
@@ -166,6 +233,7 @@ fn parse_blocks(source: &str) -> Vec<DocumentBlock> {
                     },
                     rendered: code.clone(),
                     source: format!("```\n{}\n```", code),
+                    draft: None,
                 });
                 code_lines.clear();
                 continue;
@@ -196,6 +264,7 @@ fn parse_blocks(source: &str) -> Vec<DocumentBlock> {
                 kind: BlockKind::Heading { level },
                 rendered: text.clone(),
                 source: line.to_string(),
+                draft: None,
             });
             continue;
         }
@@ -208,6 +277,7 @@ fn parse_blocks(source: &str) -> Vec<DocumentBlock> {
                 kind: BlockKind::Quote,
                 rendered: text.to_string(),
                 source: line.to_string(),
+                draft: None,
             });
             continue;
         }
@@ -220,6 +290,7 @@ fn parse_blocks(source: &str) -> Vec<DocumentBlock> {
                 kind: BlockKind::ListItem { ordered: false },
                 rendered: text.to_string(),
                 source: line.to_string(),
+                draft: None,
             });
             continue;
         }
@@ -232,6 +303,7 @@ fn parse_blocks(source: &str) -> Vec<DocumentBlock> {
                 kind: BlockKind::ListItem { ordered: true },
                 rendered: text.to_string(),
                 source: line.to_string(),
+                draft: None,
             });
             continue;
         }
@@ -249,6 +321,7 @@ fn parse_blocks(source: &str) -> Vec<DocumentBlock> {
             },
             rendered: code.clone(),
             source: format!("```\n{}\n```", code),
+            draft: None,
         });
     }
 
@@ -304,6 +377,45 @@ fn build_stats(blocks: &[DocumentBlock]) -> DocumentStats {
     stats
 }
 
+fn serialize_blocks(blocks: &[DocumentBlock]) -> String {
+    blocks
+        .iter()
+        .map(|block| block.source.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn render_block_source(kind: &BlockKind, source: &str) -> String {
+    match kind {
+        BlockKind::Heading { .. } => parse_heading(source)
+            .map(|(_, text)| text)
+            .unwrap_or_else(|| source.trim().to_string()),
+        BlockKind::Paragraph => source.trim().to_string(),
+        BlockKind::ListItem { ordered } => {
+            if *ordered {
+                parse_ordered_list_item(source)
+                    .unwrap_or(source.trim())
+                    .to_string()
+            } else {
+                parse_unordered_list_item(source)
+                    .unwrap_or(source.trim())
+                    .to_string()
+            }
+        }
+        BlockKind::Quote => source
+            .trim_start()
+            .strip_prefix("> ")
+            .unwrap_or(source.trim())
+            .to_string(),
+        BlockKind::CodeFence { .. } => source
+            .lines()
+            .skip(1)
+            .take_while(|line| !line.trim_start().starts_with("```"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
 fn parse_heading(line: &str) -> Option<(u8, String)> {
     let trimmed = line.trim_start();
     let hashes = trimmed.chars().take_while(|ch| *ch == '#').count();
@@ -345,6 +457,14 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
         HeadingLevel::H4 => 4,
         HeadingLevel::H5 => 5,
         HeadingLevel::H6 => 6,
+    }
+}
+
+impl DocumentModel {
+    fn rebuild_metadata(&mut self) {
+        self.source = serialize_blocks(&self.blocks);
+        self.outline = build_outline(&self.source);
+        self.stats = build_stats(&self.blocks);
     }
 }
 
@@ -413,5 +533,31 @@ fn main() {}
         assert!(!document.focus_next());
         assert!(document.focus_previous());
         assert_eq!(document.focused_block(), 1);
+    }
+
+    #[test]
+    fn focused_draft_can_be_applied() {
+        let mut document = DocumentModel::from_markdown("# Title\n\nParagraph");
+
+        assert!(document.focus_block(1));
+        assert!(document.set_focused_draft("Paragraph edited".to_string()));
+        assert!(document.focused_has_draft());
+        assert_eq!(document.focused_text(), Some("Paragraph edited"));
+        assert!(document.apply_focused_draft());
+        assert!(!document.focused_has_draft());
+        assert_eq!(document.blocks()[1].rendered, "Paragraph edited");
+        assert!(document.source().contains("Paragraph edited"));
+    }
+
+    #[test]
+    fn focused_draft_can_be_reverted() {
+        let mut document = DocumentModel::from_markdown("# Title\n\nParagraph");
+
+        assert!(document.focus_block(1));
+        assert!(document.append_to_focused_draft("\nprototype edit"));
+        assert!(document.focused_has_draft());
+        assert!(document.revert_focused_draft());
+        assert!(!document.focused_has_draft());
+        assert_eq!(document.focused_text(), Some("Paragraph"));
     }
 }

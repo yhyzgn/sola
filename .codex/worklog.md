@@ -48,3 +48,13 @@
    - `cargo check`
    - `cargo test --workspace`
    - `timeout 10s cargo run`
+13. 推进 focused block 的“可编辑源码态雏形”：
+   - `sola-document` 为 block 增加 `draft`
+   - 支持 `set_focused_draft` / `append_to_focused_draft` / `revert_focused_draft` / `apply_focused_draft`
+   - apply 后自动重建 `source` / `outline` / `stats`
+   - `sola-app` 为 focused block 增加 `append draft note` / `revert draft` / `apply draft` 控件
+14. 本轮修改后再次完成强校验：
+   - `cargo fmt --all`
+   - `cargo check`
+   - `cargo test --workspace`
+   - `timeout 10s cargo run`

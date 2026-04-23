@@ -251,6 +251,11 @@ impl SolaRoot {
             .focused_block_ref()
             .map(|block| block.rendered.clone())
             .unwrap_or_else(|| "no focused block".to_string());
+        let draft_label = if self.document.focused_has_draft() {
+            "draft pending"
+        } else {
+            "source synced"
+        };
 
         div()
             .flex()
@@ -285,6 +290,13 @@ impl SolaRoot {
                                         truncate_for_pill(&focused_summary, 40),
                                         &self.theme,
                                     )),
+                            )
+                            .child(
+                                pill(
+                                    "source state",
+                                    draft_label.to_string(),
+                                    &self.theme,
+                                ),
                             ),
                     ),
             )
@@ -337,19 +349,72 @@ impl SolaRoot {
             );
 
         if is_focused {
+            let mut append_button =
+                action_button("append draft note".to_string(), &self.theme, true);
+            append_button
+                .interactivity()
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    if this
+                        .document
+                        .append_to_focused_draft("\nEdited in the focused source prototype.")
+                    {
+                        cx.notify();
+                    }
+                }));
+
+            let mut revert_button = action_button(
+                "revert draft".to_string(),
+                &self.theme,
+                self.document.focused_has_draft(),
+            );
+            revert_button
+                .interactivity()
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    if this.document.revert_focused_draft() {
+                        cx.notify();
+                    }
+                }));
+
+            let mut apply_button = action_button(
+                "apply draft".to_string(),
+                &self.theme,
+                self.document.focused_has_draft(),
+            );
+            apply_button
+                .interactivity()
+                .on_click(cx.listener(|this, _event, _window, cx| {
+                    if this.document.apply_focused_draft() {
+                        cx.notify();
+                    }
+                }));
+
             card = card
                 .child(
                     div()
                         .text_size(px(13.0))
                         .text_color(rgb_hex(&self.theme.palette.text_muted))
-                        .child("Focused state · markdown source"),
+                        .child("Focused state · editable markdown source draft"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(10.0))
+                        .items_center()
+                        .child(append_button)
+                        .child(revert_button)
+                        .child(apply_button),
                 )
                 .child(
                     div()
                         .p(px(14.0))
                         .bg(rgb_hex(&self.theme.palette.code_background))
                         .rounded(px(10.0))
-                        .child(block.source.clone()),
+                        .child(
+                            self.document
+                                .focused_text()
+                                .unwrap_or(&block.source)
+                                .to_string(),
+                        ),
                 )
                 .child(
                     div()

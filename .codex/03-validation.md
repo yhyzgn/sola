@@ -53,3 +53,23 @@ timeout 10s cargo run
 ```
 
 结果：全部通过。
+
+## 增量验证（focused block draft / apply / revert）
+
+本轮新增：
+
+- focused block draft 缓冲
+- focused draft 的 apply / revert 原型
+- focused source 状态展示
+- shell 中的最小编辑按钮
+
+重新执行：
+
+```bash
+cargo fmt --all
+cargo check
+cargo test --workspace
+timeout 10s cargo run
+```
+
+结果：全部通过。
