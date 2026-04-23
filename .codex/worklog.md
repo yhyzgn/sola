@@ -58,3 +58,14 @@
    - `cargo check`
    - `cargo test --workspace`
    - `timeout 10s cargo run`
+15. 推进文档结构编辑原型：
+   - `sola-document` 新增 `insert_paragraph_after_focused`
+   - `sola-document` 新增 `duplicate_focused_block`
+   - `sola-document` 新增 `delete_focused_block`
+   - apply / insert / duplicate / delete 后统一重建 block id、source、outline、stats
+   - `sola-app` 新增 `insert paragraph` / `duplicate block` / `delete block` 按钮
+16. 本轮修改后再次完成强校验：
+   - `cargo fmt --all`
+   - `cargo check`
+   - `cargo test --workspace`
+   - `timeout 10s cargo run`

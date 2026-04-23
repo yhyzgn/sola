@@ -177,6 +177,67 @@ impl DocumentModel {
         self.rebuild_metadata();
         true
     }
+
+    pub fn insert_paragraph_after_focused(&mut self, text: impl Into<String>) -> bool {
+        let text = text.into().trim().to_string();
+        if text.is_empty() {
+            return false;
+        }
+
+        let insert_at = if self.blocks.is_empty() {
+            0
+        } else {
+            self.focused_block + 1
+        };
+
+        self.blocks.insert(
+            insert_at,
+            DocumentBlock {
+                id: insert_at,
+                kind: BlockKind::Paragraph,
+                source: text.clone(),
+                rendered: text,
+                draft: None,
+            },
+        );
+        self.focused_block = insert_at;
+        self.rebuild_metadata();
+        true
+    }
+
+    pub fn duplicate_focused_block(&mut self) -> bool {
+        let Some(block) = self.focused_block_ref().cloned() else {
+            return false;
+        };
+
+        let insert_at = self.focused_block + 1;
+        self.blocks.insert(
+            insert_at,
+            DocumentBlock {
+                id: insert_at,
+                kind: block.kind,
+                source: block.source,
+                rendered: block.rendered,
+                draft: None,
+            },
+        );
+        self.focused_block = insert_at;
+        self.rebuild_metadata();
+        true
+    }
+
+    pub fn delete_focused_block(&mut self) -> bool {
+        if self.blocks.len() <= 1 || self.focused_block >= self.blocks.len() {
+            return false;
+        }
+
+        self.blocks.remove(self.focused_block);
+        if self.focused_block >= self.blocks.len() {
+            self.focused_block = self.blocks.len().saturating_sub(1);
+        }
+        self.rebuild_metadata();
+        true
+    }
 }
 
 impl BlockKind {
@@ -462,6 +523,9 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
 
 impl DocumentModel {
     fn rebuild_metadata(&mut self) {
+        for (index, block) in self.blocks.iter_mut().enumerate() {
+            block.id = index;
+        }
         self.source = serialize_blocks(&self.blocks);
         self.outline = build_outline(&self.source);
         self.stats = build_stats(&self.blocks);
@@ -559,5 +623,37 @@ fn main() {}
         assert!(document.revert_focused_draft());
         assert!(!document.focused_has_draft());
         assert_eq!(document.focused_text(), Some("Paragraph"));
+    }
+
+    #[test]
+    fn paragraph_can_be_inserted_after_focus() {
+        let mut document = DocumentModel::from_markdown("# Title\n\nParagraph");
+
+        assert!(document.insert_paragraph_after_focused("Inserted paragraph"));
+        assert_eq!(document.block_count(), 3);
+        assert_eq!(document.focused_block(), 1);
+        assert_eq!(document.blocks()[1].rendered, "Inserted paragraph");
+    }
+
+    #[test]
+    fn focused_block_can_be_duplicated() {
+        let mut document = DocumentModel::from_markdown("# Title\n\nParagraph");
+
+        assert!(document.focus_block(1));
+        assert!(document.duplicate_focused_block());
+        assert_eq!(document.block_count(), 3);
+        assert_eq!(document.focused_block(), 2);
+        assert_eq!(document.blocks()[2].rendered, "Paragraph");
+    }
+
+    #[test]
+    fn focused_block_can_be_deleted_when_more_than_one_block_exists() {
+        let mut document = DocumentModel::from_markdown("# Title\n\nParagraph");
+
+        assert!(document.focus_block(1));
+        assert!(document.delete_focused_block());
+        assert_eq!(document.block_count(), 1);
+        assert_eq!(document.focused_block(), 0);
+        assert_eq!(document.blocks()[0].rendered, "Title");
     }
 }

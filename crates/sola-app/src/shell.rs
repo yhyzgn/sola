@@ -256,6 +256,38 @@ impl SolaRoot {
         } else {
             "source synced"
         };
+        let mut insert_button = action_button("insert paragraph".to_string(), &self.theme, true);
+        insert_button
+            .interactivity()
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                if this.document.insert_paragraph_after_focused(
+                    "A new paragraph block inserted by the structure editing prototype.",
+                ) {
+                    cx.notify();
+                }
+            }));
+
+        let mut duplicate_button = action_button("duplicate block".to_string(), &self.theme, true);
+        duplicate_button
+            .interactivity()
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                if this.document.duplicate_focused_block() {
+                    cx.notify();
+                }
+            }));
+
+        let mut delete_button = action_button(
+            "delete block".to_string(),
+            &self.theme,
+            self.document.block_count() > 1,
+        );
+        delete_button
+            .interactivity()
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                if this.document.delete_focused_block() {
+                    cx.notify();
+                }
+            }));
 
         div()
             .flex()
@@ -290,6 +322,15 @@ impl SolaRoot {
                                         truncate_for_pill(&focused_summary, 40),
                                         &self.theme,
                                     )),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(px(10.0))
+                                    .items_center()
+                                    .child(insert_button)
+                                    .child(duplicate_button)
+                                    .child(delete_button),
                             )
                             .child(
                                 pill(

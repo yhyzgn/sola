@@ -73,3 +73,23 @@ timeout 10s cargo run
 ```
 
 结果：全部通过。
+
+## 增量验证（结构编辑：插入 / 复制 / 删除 block）
+
+本轮新增：
+
+- focused block 后插入新段落
+- 复制 focused block
+- 删除 focused block
+- 文档元数据统一重建
+
+重新执行：
+
+```bash
+cargo fmt --all
+cargo check
+cargo test --workspace
+timeout 10s cargo run
+```
+
+结果：全部通过。
