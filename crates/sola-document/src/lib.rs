@@ -77,12 +77,38 @@ impl DocumentModel {
         self.focused_block
     }
 
+    pub fn focused_block_ref(&self) -> Option<&DocumentBlock> {
+        self.blocks.get(self.focused_block)
+    }
+
+    pub fn block_count(&self) -> usize {
+        self.blocks.len()
+    }
+
     pub fn focus_block(&mut self, index: usize) -> bool {
         if index >= self.blocks.len() {
             return false;
         }
 
         self.focused_block = index;
+        true
+    }
+
+    pub fn focus_next(&mut self) -> bool {
+        if self.blocks.is_empty() || self.focused_block + 1 >= self.blocks.len() {
+            return false;
+        }
+
+        self.focused_block += 1;
+        true
+    }
+
+    pub fn focus_previous(&mut self) -> bool {
+        if self.blocks.is_empty() || self.focused_block == 0 {
+            return false;
+        }
+
+        self.focused_block -= 1;
         true
     }
 }
@@ -372,6 +398,20 @@ fn main() {}
         assert!(document.focus_block(1));
         assert_eq!(document.focused_block(), 1);
         assert!(!document.focus_block(99));
+        assert_eq!(document.focused_block(), 1);
+    }
+
+    #[test]
+    fn focus_navigation_moves_between_blocks() {
+        let mut document = DocumentModel::from_markdown("# A\n\nText\n\n- item");
+
+        assert_eq!(document.block_count(), 3);
+        assert!(document.focus_next());
+        assert_eq!(document.focused_block(), 1);
+        assert!(document.focus_next());
+        assert_eq!(document.focused_block(), 2);
+        assert!(!document.focus_next());
+        assert!(document.focus_previous());
         assert_eq!(document.focused_block(), 1);
     }
 }

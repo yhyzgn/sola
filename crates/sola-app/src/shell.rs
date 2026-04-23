@@ -39,19 +39,51 @@ pub fn run() {
 }
 
 struct SolaRoot {
+    theme_mode: ThemeMode,
     theme: Theme,
     document: DocumentModel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThemeMode {
+    Dark,
+    Light,
 }
 
 impl SolaRoot {
     fn new() -> Self {
         Self {
+            theme_mode: ThemeMode::Dark,
             theme: Theme::sola_dark(),
             document: DocumentModel::from_markdown(sample_markdown()),
         }
     }
 
-    fn render_header(&self) -> Div {
+    fn sync_theme(&mut self) {
+        self.theme = match self.theme_mode {
+            ThemeMode::Dark => Theme::sola_dark(),
+            ThemeMode::Light => Theme::sola_light(),
+        };
+    }
+
+    fn toggle_theme(&mut self) {
+        self.theme_mode = self.theme_mode.toggle();
+        self.sync_theme();
+    }
+
+    fn render_header(&self, cx: &mut Context<Self>) -> Div {
+        let mut toggle_theme = action_button(
+            format!("theme: {}", self.theme_mode.label()),
+            &self.theme,
+            true,
+        );
+        toggle_theme
+            .interactivity()
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.toggle_theme();
+                cx.notify();
+            }));
+
         div()
             .flex()
             .justify_between()
@@ -81,6 +113,7 @@ impl SolaRoot {
                 div()
                     .flex()
                     .gap(px(12.0))
+                    .child(toggle_theme)
                     .child(pill("workspace", format!("{} crates", 4), &self.theme))
                     .child(pill(
                         "focused block",
@@ -187,6 +220,38 @@ impl SolaRoot {
             |surface, (index, block)| surface.child(self.render_block(index, block, cx)),
         );
 
+        let mut previous_button = action_button(
+            "← previous block".to_string(),
+            &self.theme,
+            self.document.focused_block() > 0,
+        );
+        previous_button
+            .interactivity()
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                if this.document.focus_previous() {
+                    cx.notify();
+                }
+            }));
+
+        let mut next_button = action_button(
+            "next block →".to_string(),
+            &self.theme,
+            self.document.focused_block() + 1 < self.document.block_count(),
+        );
+        next_button
+            .interactivity()
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                if this.document.focus_next() {
+                    cx.notify();
+                }
+            }));
+
+        let focused_summary = self
+            .document
+            .focused_block_ref()
+            .map(|block| block.rendered.clone())
+            .unwrap_or_else(|| "no focused block".to_string());
+
         div()
             .flex()
             .flex_col()
@@ -207,6 +272,19 @@ impl SolaRoot {
                                     .text_size(px(14.0))
                                     .text_color(rgb_hex(&self.theme.palette.text_muted))
                                     .child("Blurred blocks render their formatted summary; the focused block expands into raw Markdown source. Click another block to move focus."),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap(px(10.0))
+                                    .items_center()
+                                    .child(previous_button)
+                                    .child(next_button)
+                                    .child(pill(
+                                        "block summary",
+                                        truncate_for_pill(&focused_summary, 40),
+                                        &self.theme,
+                                    )),
                             ),
                     ),
             )
@@ -379,7 +457,7 @@ impl Render for SolaRoot {
                     .size_full()
                     .flex()
                     .flex_col()
-                    .child(self.render_header())
+                    .child(self.render_header(cx))
                     .child(
                         div()
                             .size_full()
@@ -388,6 +466,22 @@ impl Render for SolaRoot {
                             .child(self.render_document_surface(cx)),
                     ),
             )
+    }
+}
+
+impl ThemeMode {
+    fn toggle(self) -> Self {
+        match self {
+            ThemeMode::Dark => ThemeMode::Light,
+            ThemeMode::Light => ThemeMode::Dark,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            ThemeMode::Dark => "dark",
+            ThemeMode::Light => "light",
+        }
     }
 }
 
@@ -445,6 +539,42 @@ fn pill(label: &str, value: String, theme: &Theme) -> Div {
                 .text_color(rgb_hex(&theme.palette.text_primary))
                 .child(value),
         )
+}
+
+fn action_button(label: String, theme: &Theme, active: bool) -> Div {
+    let border = if active {
+        rgb_hex(&theme.palette.focused_border)
+    } else {
+        rgb_hex(&theme.palette.panel_border)
+    };
+
+    let text = if active {
+        rgb_hex(&theme.palette.text_primary)
+    } else {
+        rgb_hex(&theme.palette.text_muted)
+    };
+
+    div()
+        .flex()
+        .items_center()
+        .px(px(12.0))
+        .py(px(8.0))
+        .bg(rgb_hex(&theme.palette.panel_background))
+        .rounded(px(999.0))
+        .border_1()
+        .border_color(border)
+        .cursor_pointer()
+        .text_size(px(12.0))
+        .text_color(text)
+        .child(label)
+}
+
+fn truncate_for_pill(input: &str, max_chars: usize) -> String {
+    let mut output = input.chars().take(max_chars).collect::<String>();
+    if input.chars().count() > max_chars {
+        output.push('…');
+    }
+    output
 }
 
 #[cfg(target_os = "linux")]

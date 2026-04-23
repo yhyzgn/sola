@@ -34,3 +34,22 @@ timeout 10s cargo run
 2. 在真实桌面图形会话中仍建议再做一次手工启动验证。
 3. 双态原型已具备块级选择/展示，但还不是完整的 Typora 替代级编辑器。
 4. `pulldown-cmark` 当前用于 outline/结构抽取，后续仍需为 tree-sitter overlay 和更强编辑缓冲抽象预留演进空间。
+
+## 增量验证（主题切换 + block 导航）
+
+本轮新增：
+
+- light 主题变体
+- focused block 前后导航能力
+- shell 中的 theme toggle / previous / next 控件
+
+重新执行：
+
+```bash
+cargo fmt --all
+cargo check
+cargo test --workspace
+timeout 10s cargo run
+```
+
+结果：全部通过。

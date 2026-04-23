@@ -52,6 +52,29 @@ impl Theme {
         }
     }
 
+    pub fn sola_light() -> Self {
+        Self {
+            name: "sola-light".into(),
+            palette: ThemePalette {
+                app_background: "#f8fafc".into(),
+                panel_background: "#ffffff".into(),
+                panel_border: "#dbe4f0".into(),
+                text_primary: "#0f172a".into(),
+                text_muted: "#64748b".into(),
+                accent: "#7c3aed".into(),
+                focused_background: "#f3e8ff".into(),
+                focused_border: "#8b5cf6".into(),
+                code_background: "#eef2ff".into(),
+            },
+            typography: ThemeTypography {
+                ui_scale: 100,
+                body_size: 15,
+                title_size: 24,
+                code_size: 14,
+            },
+        }
+    }
+
     pub fn from_toml_str(input: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(input)
     }
@@ -108,5 +131,16 @@ code_size = 14
 
         assert_eq!(theme.name, "custom");
         assert_eq!(parse_hex_color(&theme.palette.accent), Some(0x7c3aed));
+    }
+
+    #[test]
+    fn light_theme_variant_is_available() {
+        let theme = Theme::sola_light();
+
+        assert_eq!(theme.name, "sola-light");
+        assert_eq!(
+            parse_hex_color(&theme.palette.app_background),
+            Some(0xf8fafc)
+        );
     }
 }

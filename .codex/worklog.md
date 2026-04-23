@@ -38,3 +38,13 @@
    - 原因：Wayland / X11 后端均不可达，GPUI 启动时 panic
    - 处理：在 `crates/sola-app/src/shell.rs` 增加 Linux 显示后端可达性探测
    - 结果：当前环境下改为输出提示并干净退出，不再 panic
+11. 继续推进下一步原型增强：
+   - `sola-theme` 新增 `sola_light` 主题
+   - `sola-document` 新增 `block_count`、`focused_block_ref`、`focus_next`、`focus_previous`
+   - `sola-app` 新增主题切换按钮与 focused block 前后导航按钮
+   - 在原型头部显示当前 theme 与 focused block 摘要
+12. 本轮修改后再次完成强校验：
+   - `cargo fmt --all`
+   - `cargo check`
+   - `cargo test --workspace`
+   - `timeout 10s cargo run`
