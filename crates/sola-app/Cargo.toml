@@ -1,0 +1,13 @@
+[package]
+name = "sola-app"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+gpui.workspace = true
+sola-core = { path = "../sola-core" }
+sola-document = { path = "../sola-document" }
+sola-theme = { path = "../sola-theme" }

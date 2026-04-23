@@ -1,0 +1,28 @@
+[workspace]
+members = [
+    ".",
+    "crates/sola-app",
+    "crates/sola-core",
+    "crates/sola-document",
+    "crates/sola-theme",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1.0"
+gpui = "0.2.2"
+pulldown-cmark = "0.13.0"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+[package]
+name = "sola"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sola-app = { path = "crates/sola-app" }

@@ -1,0 +1,11 @@
+[package]
+name = "sola-theme"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true
