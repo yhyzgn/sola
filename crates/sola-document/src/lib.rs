@@ -34,12 +34,23 @@ pub struct DocumentStats {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct DocumentSnapshot {
+    source: String,
+    blocks: Vec<DocumentBlock>,
+    outline: Vec<OutlineEntry>,
+    stats: DocumentStats,
+    focused_block: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentModel {
     source: String,
     blocks: Vec<DocumentBlock>,
     outline: Vec<OutlineEntry>,
     stats: DocumentStats,
     focused_block: usize,
+    undo_stack: Vec<DocumentSnapshot>,
+    redo_stack: Vec<DocumentSnapshot>,
 }
 
 impl DocumentModel {
@@ -55,6 +66,8 @@ impl DocumentModel {
             outline,
             stats,
             focused_block: 0,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -88,6 +101,34 @@ impl DocumentModel {
 
     pub fn block_count(&self) -> usize {
         self.blocks.len()
+    }
+
+    pub fn can_undo(&self) -> bool {
+        !self.undo_stack.is_empty()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        !self.redo_stack.is_empty()
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let Some(snapshot) = self.undo_stack.pop() else {
+            return false;
+        };
+
+        self.redo_stack.push(self.snapshot());
+        self.restore_snapshot(snapshot);
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some(snapshot) = self.redo_stack.pop() else {
+            return false;
+        };
+
+        self.undo_stack.push(self.snapshot());
+        self.restore_snapshot(snapshot);
+        true
     }
 
     pub fn focus_block(&mut self, index: usize) -> bool {
@@ -129,16 +170,22 @@ impl DocumentModel {
     }
 
     pub fn set_focused_draft(&mut self, draft: String) -> bool {
-        let Some(block) = self.focused_block_mut() else {
+        let Some(block) = self.focused_block_ref() else {
             return false;
         };
 
-        if draft == block.source {
-            block.draft = None;
+        let next_draft = if draft == block.source {
+            None
         } else {
-            block.draft = Some(draft);
+            Some(draft)
+        };
+
+        if block.draft == next_draft {
+            return false;
         }
 
+        self.push_undo_snapshot();
+        self.blocks[self.focused_block].draft = next_draft;
         true
     }
 
@@ -173,25 +220,33 @@ impl DocumentModel {
     }
 
     pub fn revert_focused_draft(&mut self) -> bool {
-        let Some(block) = self.focused_block_mut() else {
+        let Some(block) = self.focused_block_ref() else {
             return false;
         };
 
-        let had_draft = block.draft.is_some();
-        block.draft = None;
-        had_draft
+        if block.draft.is_none() {
+            return false;
+        }
+
+        self.push_undo_snapshot();
+        self.blocks[self.focused_block].draft = None;
+        true
     }
 
     pub fn apply_focused_draft(&mut self) -> bool {
         let index = self.focused_block;
-        let Some(block) = self.blocks.get_mut(index) else {
+        let Some(block) = self.blocks.get(index) else {
             return false;
         };
 
-        let Some(draft) = block.draft.take() else {
+        let Some(draft) = block.draft.clone() else {
             return false;
         };
 
+        self.push_undo_snapshot();
+
+        let block = &mut self.blocks[index];
+        block.draft = None;
         block.source = draft;
         block.rendered = render_block_source(&block.kind, &block.source);
 
@@ -211,6 +266,7 @@ impl DocumentModel {
             self.focused_block + 1
         };
 
+        self.push_undo_snapshot();
         self.blocks.insert(
             insert_at,
             DocumentBlock {
@@ -232,6 +288,7 @@ impl DocumentModel {
         };
 
         let insert_at = self.focused_block + 1;
+        self.push_undo_snapshot();
         self.blocks.insert(
             insert_at,
             DocumentBlock {
@@ -252,6 +309,7 @@ impl DocumentModel {
             return false;
         }
 
+        self.push_undo_snapshot();
         self.blocks.remove(self.focused_block);
         if self.focused_block >= self.blocks.len() {
             self.focused_block = self.blocks.len().saturating_sub(1);
@@ -543,6 +601,29 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
 }
 
 impl DocumentModel {
+    fn snapshot(&self) -> DocumentSnapshot {
+        DocumentSnapshot {
+            source: self.source.clone(),
+            blocks: self.blocks.clone(),
+            outline: self.outline.clone(),
+            stats: self.stats.clone(),
+            focused_block: self.focused_block,
+        }
+    }
+
+    fn restore_snapshot(&mut self, snapshot: DocumentSnapshot) {
+        self.source = snapshot.source;
+        self.blocks = snapshot.blocks;
+        self.outline = snapshot.outline;
+        self.stats = snapshot.stats;
+        self.focused_block = snapshot.focused_block;
+    }
+
+    fn push_undo_snapshot(&mut self) {
+        self.undo_stack.push(self.snapshot());
+        self.redo_stack.clear();
+    }
+
     fn rebuild_metadata(&mut self) {
         for (index, block) in self.blocks.iter_mut().enumerate() {
             block.id = index;
@@ -687,5 +768,58 @@ fn main() {}
         assert_eq!(document.block_count(), 1);
         assert_eq!(document.focused_block(), 0);
         assert_eq!(document.blocks()[0].rendered, "Title");
+    }
+
+    #[test]
+    fn undo_and_redo_restore_focused_draft_edits() {
+        let mut document = DocumentModel::from_markdown("# Title\n\nParagraph");
+
+        assert!(document.focus_block(1));
+        assert!(document.push_char_to_focused_draft('!'));
+        assert_eq!(document.focused_text(), Some("Paragraph!"));
+        assert!(document.can_undo());
+
+        assert!(document.undo());
+        assert_eq!(document.focused_text(), Some("Paragraph"));
+        assert!(!document.focused_has_draft());
+        assert!(document.can_redo());
+
+        assert!(document.redo());
+        assert_eq!(document.focused_text(), Some("Paragraph!"));
+        assert!(document.focused_has_draft());
+    }
+
+    #[test]
+    fn undo_and_redo_restore_structural_edits() {
+        let mut document = DocumentModel::from_markdown("# Title\n\nParagraph");
+
+        assert!(document.focus_block(1));
+        assert!(document.duplicate_focused_block());
+        assert_eq!(document.block_count(), 3);
+        assert_eq!(document.focused_block(), 2);
+
+        assert!(document.undo());
+        assert_eq!(document.block_count(), 2);
+        assert_eq!(document.focused_block(), 1);
+        assert_eq!(document.blocks()[1].rendered, "Paragraph");
+
+        assert!(document.redo());
+        assert_eq!(document.block_count(), 3);
+        assert_eq!(document.focused_block(), 2);
+        assert_eq!(document.blocks()[2].rendered, "Paragraph");
+    }
+
+    #[test]
+    fn new_edit_clears_redo_history() {
+        let mut document = DocumentModel::from_markdown("# Title\n\nParagraph");
+
+        assert!(document.focus_block(1));
+        assert!(document.push_char_to_focused_draft('!'));
+        assert!(document.undo());
+        assert!(document.can_redo());
+
+        assert!(document.push_char_to_focused_draft('?'));
+        assert!(!document.can_redo());
+        assert_eq!(document.focused_text(), Some("Paragraph?"));
     }
 }

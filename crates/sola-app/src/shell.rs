@@ -1,7 +1,7 @@
 use gpui::{
     AppContext, Application, Bounds, Context, Div, FocusHandle, FontWeight, Hsla,
-    InteractiveElement, IntoElement, ParentElement, Render, Styled, Window, WindowBounds,
-    WindowOptions, div, px, rgb, size,
+    InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled,
+    Window, WindowBounds, WindowOptions, div, px, rgb, size,
 };
 use sola_core::{APP_NAME, APP_TAGLINE, ROADMAP_PHASES, sample_markdown};
 use sola_document::{BlockKind, DocumentBlock, DocumentModel};
@@ -74,17 +74,16 @@ impl SolaRoot {
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> Div {
-        let mut toggle_theme = action_button(
+        let toggle_theme = action_button(
             format!("theme: {}", self.theme_mode.label()),
             &self.theme,
             true,
-        );
-        toggle_theme
-            .interactivity()
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                this.toggle_theme();
-                cx.notify();
-            }));
+        )
+        .id("toggle-theme")
+        .on_click(cx.listener(|this, _event, _window, cx| {
+            this.toggle_theme();
+            cx.notify();
+        }));
 
         div()
             .flex()
@@ -222,31 +221,29 @@ impl SolaRoot {
             |surface, (index, block)| surface.child(self.render_block(index, block, cx)),
         );
 
-        let mut previous_button = action_button(
+        let previous_button = action_button(
             "← previous block".to_string(),
             &self.theme,
             self.document.focused_block() > 0,
-        );
-        previous_button
-            .interactivity()
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                if this.document.focus_previous() {
-                    cx.notify();
-                }
-            }));
+        )
+        .id("previous-block")
+        .on_click(cx.listener(|this, _event, _window, cx| {
+            if this.document.focus_previous() {
+                cx.notify();
+            }
+        }));
 
-        let mut next_button = action_button(
+        let next_button = action_button(
             "next block →".to_string(),
             &self.theme,
             self.document.focused_block() + 1 < self.document.block_count(),
-        );
-        next_button
-            .interactivity()
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                if this.document.focus_next() {
-                    cx.notify();
-                }
-            }));
+        )
+        .id("next-block")
+        .on_click(cx.listener(|this, _event, _window, cx| {
+            if this.document.focus_next() {
+                cx.notify();
+            }
+        }));
 
         let focused_summary = self
             .document
@@ -258,9 +255,8 @@ impl SolaRoot {
         } else {
             "source synced"
         };
-        let mut insert_button = action_button("insert paragraph".to_string(), &self.theme, true);
-        insert_button
-            .interactivity()
+        let insert_button = action_button("insert paragraph".to_string(), &self.theme, true)
+            .id("insert-paragraph")
             .on_click(cx.listener(|this, _event, _window, cx| {
                 if this.document.insert_paragraph_after_focused(
                     "A new paragraph block inserted by the structure editing prototype.",
@@ -269,24 +265,38 @@ impl SolaRoot {
                 }
             }));
 
-        let mut duplicate_button = action_button("duplicate block".to_string(), &self.theme, true);
-        duplicate_button
-            .interactivity()
+        let duplicate_button = action_button("duplicate block".to_string(), &self.theme, true)
+            .id("duplicate-block")
             .on_click(cx.listener(|this, _event, _window, cx| {
                 if this.document.duplicate_focused_block() {
                     cx.notify();
                 }
             }));
 
-        let mut delete_button = action_button(
+        let delete_button = action_button(
             "delete block".to_string(),
             &self.theme,
             self.document.block_count() > 1,
-        );
-        delete_button
-            .interactivity()
+        )
+        .id("delete-block")
+        .on_click(cx.listener(|this, _event, _window, cx| {
+            if this.document.delete_focused_block() {
+                cx.notify();
+            }
+        }));
+
+        let undo_button = action_button("undo".to_string(), &self.theme, self.document.can_undo())
+            .id("undo")
             .on_click(cx.listener(|this, _event, _window, cx| {
-                if this.document.delete_focused_block() {
+                if this.document.undo() {
+                    cx.notify();
+                }
+            }));
+
+        let redo_button = action_button("redo".to_string(), &self.theme, self.document.can_redo())
+            .id("redo")
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                if this.document.redo() {
                     cx.notify();
                 }
             }));
@@ -294,7 +304,9 @@ impl SolaRoot {
         div()
             .flex()
             .flex_col()
-            .size_full()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
             .child(
                 div()
                     .p(px(24.0))
@@ -320,6 +332,8 @@ impl SolaRoot {
                                     .flex()
                                     .gap(px(10.0))
                                     .items_center()
+                                    .child(undo_button)
+                                    .child(redo_button)
                                     .child(previous_button)
                                     .child(next_button)
                                     .child(pill(
@@ -345,11 +359,24 @@ impl SolaRoot {
                             .child(shortcut_legend(&self.theme)),
                     ),
             )
-            .child(blocks)
+            .child(
+                div()
+                    .id("document-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(blocks),
+            )
     }
 
-    fn render_block(&self, index: usize, block: &DocumentBlock, cx: &mut Context<Self>) -> Div {
+    fn render_block(
+        &self,
+        index: usize,
+        block: &DocumentBlock,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let is_focused = self.document.focused_block() == index;
+        let has_draft = is_focused && self.document.focused_has_draft();
         let border = if is_focused {
             rgb_hex(&self.theme.palette.focused_border)
         } else {
@@ -361,7 +388,16 @@ impl SolaRoot {
             rgb_hex(&self.theme.palette.panel_background)
         };
 
+        let block_status = if has_draft {
+            "draft"
+        } else if is_focused {
+            "focused"
+        } else {
+            "blurred"
+        };
+
         let mut card = div()
+            .id(("block-card", index))
             .flex()
             .flex_col()
             .gap(px(12.0))
@@ -371,6 +407,7 @@ impl SolaRoot {
             .border_1()
             .border_color(border)
             .cursor_pointer()
+            .track_focus(&self.focus_handle)
             .child(
                 div()
                     .flex()
@@ -378,11 +415,7 @@ impl SolaRoot {
                     .items_center()
                     .child(pill(
                         block.kind.label(),
-                        if is_focused {
-                            "focused".to_string()
-                        } else {
-                            "blurred".to_string()
-                        },
+                        block_status.to_string(),
                         &self.theme,
                     ))
                     .child(
@@ -394,10 +427,14 @@ impl SolaRoot {
             );
 
         if is_focused {
-            let mut append_button =
-                action_button("append draft note".to_string(), &self.theme, true);
-            append_button
-                .interactivity()
+            card = card.on_key_down(cx.listener(|this, event, _window, cx| {
+                if this.handle_focused_key_down(event) {
+                    cx.notify();
+                }
+            }));
+
+            let append_button = action_button("append draft note".to_string(), &self.theme, true)
+                .id(("append-draft", index))
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     if this
                         .document
@@ -407,26 +444,16 @@ impl SolaRoot {
                     }
                 }));
 
-            let mut revert_button = action_button(
-                "revert draft".to_string(),
-                &self.theme,
-                self.document.focused_has_draft(),
-            );
-            revert_button
-                .interactivity()
+            let revert_button = action_button("revert draft".to_string(), &self.theme, has_draft)
+                .id(("revert-draft", index))
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     if this.document.revert_focused_draft() {
                         cx.notify();
                     }
                 }));
 
-            let mut apply_button = action_button(
-                "apply draft".to_string(),
-                &self.theme,
-                self.document.focused_has_draft(),
-            );
-            apply_button
-                .interactivity()
+            let apply_button = action_button("apply draft".to_string(), &self.theme, has_draft)
+                .id(("apply-draft", index))
                 .on_click(cx.listener(|this, _event, _window, cx| {
                     if this.document.apply_focused_draft() {
                         cx.notify();
@@ -469,23 +496,15 @@ impl SolaRoot {
                 )
                 .child(self.render_blurred_content(block));
         } else {
-            card = card.track_focus(&self.focus_handle);
             card = card.child(self.render_blurred_content(block));
         }
 
-        card = card.on_key_down(cx.listener(|this, event, _window, cx| {
-            if this.handle_focused_key_down(event) {
+        card = card.on_click(cx.listener(move |this, _event, window, cx| {
+            if this.document.focus_block(index) {
+                window.focus(&this.focus_handle);
                 cx.notify();
             }
         }));
-
-        card.interactivity()
-            .on_click(cx.listener(move |this, _event, window, cx| {
-                if this.document.focus_block(index) {
-                    window.focus(&this.focus_handle);
-                    cx.notify();
-                }
-            }));
 
         card
     }
@@ -573,6 +592,18 @@ impl SolaRoot {
         if primary && key.eq_ignore_ascii_case("t") {
             self.toggle_theme();
             return true;
+        }
+
+        if primary && modifiers.shift && key.eq_ignore_ascii_case("z") {
+            return self.document.redo();
+        }
+
+        if primary && key.eq_ignore_ascii_case("y") {
+            return self.document.redo();
+        }
+
+        if primary && key.eq_ignore_ascii_case("z") {
+            return self.document.undo();
         }
 
         if modifiers.alt && key.eq_ignore_ascii_case("up") {
@@ -757,6 +788,8 @@ fn shortcut_legend(theme: &Theme) -> Div {
         .flex_wrap()
         .gap(px(8.0))
         .child(shortcut_chip("Ctrl/Cmd+T", "toggle theme", theme))
+        .child(shortcut_chip("Ctrl/Cmd+Z", "undo", theme))
+        .child(shortcut_chip("Ctrl/Cmd+Shift+Z", "redo", theme))
         .child(shortcut_chip("Alt+↑/↓", "move focus", theme))
         .child(shortcut_chip("Ctrl/Cmd+N", "insert paragraph", theme))
         .child(shortcut_chip("Ctrl/Cmd+D", "duplicate block", theme))

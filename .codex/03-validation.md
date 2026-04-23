@@ -134,3 +134,53 @@ timeout 10s cargo run
 ```
 
 结果：全部通过。
+
+## 增量验证（Undo / Redo 编辑历史）
+
+本轮新增：
+
+- `sola-document` 快照式撤销/重做历史
+- focused draft 编辑纳入撤销/重做链路
+- block 插入 / 复制 / 删除纳入撤销/重做链路
+- `sola-app` 新增 undo / redo 按钮与快捷键
+
+重新执行：
+
+```bash
+cargo fmt --all
+cargo check
+cargo test --workspace
+timeout 10s cargo run
+```
+
+结果：全部通过。
+
+新增通过的测试：
+
+- `sola-document`
+  - `undo_and_redo_restore_focused_draft_edits`
+  - `undo_and_redo_restore_structural_edits`
+  - `new_edit_clears_redo_history`
+
+## 增量验证（交互失效修复）
+
+本轮修复：
+
+- 可点击按钮与 block card 改为带 `id()` 的 stateful interactive element
+- 文档内容区增加 stateful scroll container，并启用 `overflow_y_scroll()`
+- 主内容区补充 flex 布局约束，确保滚动区域可实际滚动
+
+重新执行：
+
+```bash
+cargo fmt --all
+cargo check
+cargo test --workspace
+timeout 10s cargo run
+```
+
+结果：全部通过。
+
+已知验证缺口：
+
+- 当前容器环境没有可用桌面显示后端，无法在本轮内完成真实窗口中的手工点击 / 键盘 / 滚轮交互验证。

@@ -90,7 +90,72 @@
    - `sola-app` 支持 `Ctrl/Cmd+N` 插入段落、`Ctrl/Cmd+D` 复制 block、`Ctrl/Cmd+Backspace` 删除 block
    - `sola-app` 增加快捷键提示条
 20. 本轮修改后再次完成强校验：
-   - `cargo fmt --all`
-   - `cargo check`
-   - `cargo test --workspace`
-   - `timeout 10s cargo run`
+    - `cargo fmt --all`
+    - `cargo check`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`
+21. 双态引擎细节打磨：
+    - 修复 `on_key_down` 挂载位置问题：原来对所有 block 挂载键盘处理，现在只对 focused block 挂载
+    - 新增 draft 视觉反馈：block 头部标签现在显示 "draft"（有未提交的修改）/ "focused"（无修改）/ "blurred"（非当前块）
+    - 优化 revert/apply 按钮的激活状态：使用局部 `has_draft` 变量，减少重复调用
+    - 退格失败反馈暂不实现（需要光标/选区 UI，超出原型范围）
+22. 本轮修改后再次完成强校验：
+    - `cargo fmt --all`
+    - `cargo check`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`
+23. 修复鼠标键盘事件无响应问题：
+    - 原因：focused block 缺少 `track_focus` 调用，导致 GPUI 焦点系统未正确建立
+    - 修复：在 focused block 的 `if is_focused` 分支中添加 `card.track_focus(&self.focus_handle)`
+24. 本轮修改后再次完成强校验：
+    - `cargo fmt --all`
+    - `cargo check`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`
+25. 再次修复鼠标键盘事件无响应：
+    - 原因：只有 blurred block 调用 `track_focus`，focused block 没有，导致焦点路由断裂
+    - 修复：将 `track_focus` 移到所有 block 共用的 card 初始化处，确保所有 block 都能参与焦点路由
+26. 本轮修改后再次完成强校验：
+    - `cargo fmt --all`
+    - `cargo check`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`
+27. 再次修复鼠标键盘事件无响应：
+    - 原因：编辑过程中多次修复导致 `on_key_down` 被错误地挂载到所有 block，else 分支也有多余的 `track_focus`
+    - 修复：从 git 恢复后重新正确编辑，确保：
+      - `track_focus` 只在 card 初始化时调用一次（所有 block 共用）
+      - `on_key_down` 只在 `if is_focused` 分支调用
+      - 删除 else 分支多余的 `track_focus`
+28. 本轮修改后再次完成强校验：
+    - `cargo fmt --all`
+    - `cargo check`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`
+29. 继续推进编辑器骨架能力：
+    - `sola-document` 新增快照式 `undo/redo` 历史栈
+    - 将 focused draft 编辑与结构编辑统一纳入撤销/重做链路
+    - 新增 `can_undo` / `can_redo` / `undo` / `redo`
+    - 为 draft 编辑、结构编辑、redo 清空行为补充回归测试
+30. 为 `sola-app` 接入撤销/重做命令面：
+    - 新增 `undo` / `redo` 按钮，并根据历史状态启用/禁用
+    - 新增 `Ctrl/Cmd+Z` 撤销
+    - 新增 `Ctrl/Cmd+Shift+Z` 与 `Ctrl/Cmd+Y` 重做
+    - 快捷键提示条同步更新
+31. 本轮修改后再次完成强校验：
+    - `cargo fmt --all`
+    - `cargo check`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`
+32. 修复当前原型“鼠标键盘事件都不响应、也无法滚动”的交互失效问题：
+    - 根因：GPUI 需要通过 `id()` 将元素提升为 stateful element，按钮 / block card / scroll container 之前是裸 `Div`
+    - 结果：虽然低层 `interactivity()` 调用能编译，但点击、焦点键盘、滚动相关状态没有挂到正确的 stateful 交互面
+    - 修复：
+      - 为所有可点击按钮添加稳定 `id`
+      - 为 block card 添加 `id(("block-card", index))`
+      - 为文档内容区添加 `id("document-scroll")` 并启用 `overflow_y_scroll()`
+      - 为主内容区补 `flex_1` / `min_w_0` / `min_h_0`，确保滚动容器在 flex 布局中生效
+33. 本轮修改后再次完成强校验：
+    - `cargo fmt --all`
+    - `cargo check`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`
