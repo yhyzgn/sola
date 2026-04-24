@@ -5,7 +5,7 @@ use gpui::{
 };
 use sola_core::{APP_NAME, APP_TAGLINE, ROADMAP_PHASES, sample_markdown};
 use sola_document::highlighter::{HighlightKind, SyntaxHighlighter};
-use sola_document::{BlockKind, DocumentBlock, DocumentModel, HtmlAdapter, HtmlNode};
+use sola_document::{BlockKind, CursorState, DocumentBlock, DocumentModel, HtmlAdapter, HtmlNode};
 use sola_theme::{Theme, parse_hex_color};
 #[cfg(target_os = "linux")]
 use std::{
@@ -487,6 +487,7 @@ impl SolaRoot {
                         .child(self.render_highlighted_text(
                             self.document.focused_text().unwrap_or(&block.source),
                             13.0,
+                            self.document.focused_cursor(),
                         )),
                 )
                 .child(
@@ -582,7 +583,7 @@ impl SolaRoot {
                         .p(px(14.0))
                         .bg(rgb_hex(&self.theme.palette.code_background))
                         .rounded(px(10.0))
-                        .child(self.render_highlighted_text(&block.rendered, 13.0)),
+                        .child(self.render_highlighted_text(&block.rendered, 13.0, None)),
                 ),
         }
     }
@@ -703,32 +704,155 @@ impl SolaRoot {
         )
     }
 
-    fn render_highlighted_text(&self, text: &str, default_size: f32) -> Div {
+    fn render_highlighted_text(
+        &self,
+        text: &str,
+        default_size: f32,
+        cursor: Option<&CursorState>,
+    ) -> Div {
         let spans = self.highlighter.highlight(text);
         let syntax = &self.theme.syntax;
+        let palette = &self.theme.palette;
 
-        spans.iter().fold(
-            div().flex().flex_wrap().items_center().gap(px(0.0)),
-            |content, span| {
-                let color = match span.kind {
-                    HighlightKind::Keyword => &syntax.keyword,
-                    HighlightKind::String => &syntax.string,
-                    HighlightKind::Comment => &syntax.comment,
-                    HighlightKind::Function => &syntax.function,
-                    HighlightKind::Number => &syntax.number,
-                    HighlightKind::Constant => &syntax.constant,
-                    HighlightKind::TypeName => &syntax.type_name,
-                    HighlightKind::Other => &self.theme.palette.text_primary,
-                };
+        let mut current_offset = 0;
+        let mut content = div().flex().flex_wrap().items_center().gap(px(0.0));
 
-                content.child(
+        for span in spans {
+            let start = current_offset;
+            let end = current_offset + span.text.len();
+            current_offset = end;
+
+            let color = match span.kind {
+                HighlightKind::Keyword => &syntax.keyword,
+                HighlightKind::String => &syntax.string,
+                HighlightKind::Comment => &syntax.comment,
+                HighlightKind::Function => &syntax.function,
+                HighlightKind::Number => &syntax.number,
+                HighlightKind::Constant => &syntax.constant,
+                HighlightKind::TypeName => &syntax.type_name,
+                HighlightKind::Other => &palette.text_primary,
+            };
+
+            if let Some(cursor) = cursor {
+                let head = cursor.head;
+                let anchor = cursor.anchor;
+                let sel_start = anchor.map(|a| a.min(head));
+                let sel_end = anchor.map(|a| a.max(head));
+
+                let mut split_points = Vec::new();
+                if head >= start && head <= end {
+                    split_points.push(head);
+                }
+                if let Some(s) = sel_start {
+                    if s >= start && s <= end {
+                        split_points.push(s);
+                    }
+                }
+                if let Some(e) = sel_end {
+                    if e >= start && e <= end {
+                        split_points.push(e);
+                    }
+                }
+                split_points.sort();
+                split_points.dedup();
+
+                let mut last_p = start;
+                for p in split_points {
+                    if p > last_p {
+                        let sub_text = &span.text[last_p - start..p - start];
+                        content = content.child(self.render_span_fragment(
+                            sub_text,
+                            default_size,
+                            color,
+                            last_p,
+                            p,
+                            sel_start,
+                            sel_end,
+                        ));
+                    }
+                    if p == head {
+                        content = content.child(
+                            div()
+                                .w(px(2.0))
+                                .h(px(default_size + 2.0))
+                                .bg(rgb_hex(&palette.cursor)),
+                        );
+                    }
+                    last_p = p;
+                }
+                if last_p < end {
+                    let sub_text = &span.text[last_p - start..end - start];
+                    content = content.child(self.render_span_fragment(
+                        sub_text,
+                        default_size,
+                        color,
+                        last_p,
+                        end,
+                        sel_start,
+                        sel_end,
+                    ));
+                }
+            } else {
+                content = content.child(
                     div()
                         .text_size(px(default_size))
                         .text_color(rgb_hex(color))
                         .child(span.text.clone()),
-                )
-            },
-        )
+                );
+            }
+        }
+
+        // If cursor is at the very end of the text
+        if let Some(cursor) = cursor {
+            if cursor.head == text.len() && !text.ends_with('\n') {
+                // If the loop didn't render the cursor because it's exactly at text.len()
+                // and we didn't have a span ending exactly there that triggered the p == head check
+                // or if the text is empty.
+                // Wait, if text is empty, the loop won't run.
+            }
+        }
+
+        // Actually, let's just check if we ever rendered the cursor.
+        // Or simpler: if head == text.len(), append cursor at the end.
+        if let Some(cursor) = cursor {
+            if cursor.head == text.len() {
+                content = content.child(
+                    div()
+                        .w(px(2.0))
+                        .h(px(default_size + 2.0))
+                        .bg(rgb_hex(&palette.cursor)),
+                );
+            }
+        }
+
+        content
+    }
+
+    fn render_span_fragment(
+        &self,
+        text: &str,
+        size: f32,
+        color: &str,
+        start: usize,
+        end: usize,
+        sel_start: Option<usize>,
+        sel_end: Option<usize>,
+    ) -> Div {
+        let is_selected = if let (Some(s), Some(e)) = (sel_start, sel_end) {
+            start >= s && end <= e
+        } else {
+            false
+        };
+
+        let mut fragment = div()
+            .text_size(px(size))
+            .text_color(rgb_hex(color))
+            .child(text.to_string());
+
+        if is_selected {
+            fragment = fragment.bg(rgb_hex(&self.theme.palette.selection));
+        }
+        fragment
     }
 }
 
@@ -763,6 +887,18 @@ impl SolaRoot {
             return self.document.focus_next();
         }
 
+        if key.eq_ignore_ascii_case("left") {
+            return self.document.move_cursor_left(modifiers.shift);
+        }
+
+        if key.eq_ignore_ascii_case("right") {
+            return self.document.move_cursor_right(modifiers.shift);
+        }
+
+        if primary && key.eq_ignore_ascii_case("a") {
+            return self.document.select_all();
+        }
+
         if primary && key.eq_ignore_ascii_case("n") {
             return self.document.insert_paragraph_after_focused(
                 "Inserted via keyboard shortcut as a structure-editing prototype.",
@@ -786,7 +922,7 @@ impl SolaRoot {
         }
 
         if key.eq_ignore_ascii_case("backspace") {
-            return self.document.delete_last_char_from_focused_draft();
+            return self.document.delete_at_cursor_in_focused_draft();
         }
 
         if key.eq_ignore_ascii_case("enter") {
@@ -940,6 +1076,9 @@ fn shortcut_legend(theme: &Theme) -> Div {
         .child(shortcut_chip("Ctrl/Cmd+Z", "undo", theme))
         .child(shortcut_chip("Ctrl/Cmd+Shift+Z", "redo", theme))
         .child(shortcut_chip("Alt+↑/↓", "move focus", theme))
+        .child(shortcut_chip("←/→", "move cursor", theme))
+        .child(shortcut_chip("Shift+←/→", "select", theme))
+        .child(shortcut_chip("Ctrl/Cmd+A", "select all", theme))
         .child(shortcut_chip("Ctrl/Cmd+N", "insert paragraph", theme))
         .child(shortcut_chip("Ctrl/Cmd+D", "duplicate block", theme))
         .child(shortcut_chip("Ctrl/Cmd+Backspace", "delete block", theme))

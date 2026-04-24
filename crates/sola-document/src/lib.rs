@@ -39,6 +39,21 @@ pub enum HtmlAdapter {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorState {
+    pub head: usize,
+    pub anchor: Option<usize>,
+}
+
+impl Default for CursorState {
+    fn default() -> Self {
+        Self {
+            head: 0,
+            anchor: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentBlock {
     pub id: usize,
     pub kind: BlockKind,
@@ -46,6 +61,7 @@ pub struct DocumentBlock {
     pub rendered: String,
     pub html: Option<HtmlAdapter>,
     pub draft: Option<String>,
+    pub cursor: CursorState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,8 +215,13 @@ impl DocumentModel {
             .is_some()
     }
 
+    pub fn focused_cursor(&self) -> Option<&CursorState> {
+        self.focused_block_ref().map(|b| &b.cursor)
+    }
+
     pub fn set_focused_draft(&mut self, draft: String) -> bool {
-        let Some(block) = self.focused_block_ref() else {
+        let index = self.focused_block;
+        let Some(block) = self.blocks.get_mut(index) else {
             return false;
         };
 
@@ -215,38 +236,178 @@ impl DocumentModel {
         }
 
         self.push_undo_snapshot();
-        self.blocks[self.focused_block].draft = next_draft;
+        self.blocks[index].draft = next_draft;
+
+        // Ensure cursor is within bounds
+        let text_len = self.focused_text().unwrap_or("").len();
+        if self.blocks[index].cursor.head > text_len {
+            self.blocks[index].cursor.head = text_len;
+        }
+        if let Some(anchor) = self.blocks[index].cursor.anchor {
+            if anchor > text_len {
+                self.blocks[index].cursor.anchor = Some(text_len);
+            }
+        }
+        true
+    }
+
+    pub fn insert_text_at_cursor(&mut self, text_to_insert: &str) -> bool {
+        let index = self.focused_block;
+        let Some(current_text) = self.focused_text().map(ToOwned::to_owned) else {
+            return false;
+        };
+        let cursor = self.blocks[index].cursor.clone();
+
+        self.push_undo_snapshot();
+        let (new_text, new_head) = if let Some(anchor) = cursor.anchor {
+            let start = cursor.head.min(anchor);
+            let end = cursor.head.max(anchor);
+            let mut s = current_text;
+            s.replace_range(start..end, text_to_insert);
+            (s, start + text_to_insert.len())
+        } else {
+            let mut s = current_text;
+            s.insert_str(cursor.head, text_to_insert);
+            (s, cursor.head + text_to_insert.len())
+        };
+
+        let block = &mut self.blocks[index];
+        block.cursor.head = new_head;
+        block.cursor.anchor = None;
+        block.draft = (new_text != block.source).then_some(new_text);
         true
     }
 
     pub fn append_to_focused_draft(&mut self, suffix: &str) -> bool {
-        let Some(current) = self.focused_text().map(ToOwned::to_owned) else {
+        let index = self.focused_block;
+        let Some(current) = self.focused_text() else {
             return false;
         };
+        let end = current.len();
 
-        let next = format!("{current}{suffix}");
-        self.set_focused_draft(next)
+        self.blocks[index].cursor.head = end;
+        self.blocks[index].cursor.anchor = None;
+        self.insert_text_at_cursor(suffix)
     }
 
     pub fn push_char_to_focused_draft(&mut self, ch: char) -> bool {
-        let Some(current) = self.focused_text().map(ToOwned::to_owned) else {
+        self.insert_text_at_cursor(&ch.to_string())
+    }
+
+    pub fn delete_at_cursor_in_focused_draft(&mut self) -> bool {
+        let index = self.focused_block;
+        let Some(text) = self.focused_text().map(ToOwned::to_owned) else {
             return false;
         };
+        let cursor = self.blocks[index].cursor.clone();
 
-        let next = format!("{current}{ch}");
-        self.set_focused_draft(next)
+        if cursor.anchor.is_none() && cursor.head == 0 {
+            return false;
+        }
+
+        self.push_undo_snapshot();
+        let (new_text, new_head) = if let Some(anchor) = cursor.anchor {
+            let start = cursor.head.min(anchor);
+            let end = cursor.head.max(anchor);
+            let mut s = text;
+            s.replace_range(start..end, "");
+            (s, start)
+        } else {
+            let mut s = text;
+            let Some((prev_idx, _)) = s[..cursor.head].char_indices().next_back() else {
+                return false;
+            };
+            s.remove(prev_idx);
+            (s, prev_idx)
+        };
+
+        let block = &mut self.blocks[index];
+        block.cursor.head = new_head;
+        block.cursor.anchor = None;
+        block.draft = (new_text != block.source).then_some(new_text);
+        true
     }
 
     pub fn delete_last_char_from_focused_draft(&mut self) -> bool {
-        let Some(current) = self.focused_text().map(ToOwned::to_owned) else {
+        self.delete_at_cursor_in_focused_draft()
+    }
+
+    pub fn move_cursor_left(&mut self, shift: bool) -> bool {
+        let index = self.focused_block;
+        let head = self.blocks[index].cursor.head;
+        let anchor = self.blocks[index].cursor.anchor;
+
+        if !shift && anchor.is_some() {
+            self.blocks[index].cursor.head = head.min(anchor.unwrap());
+            self.blocks[index].cursor.anchor = None;
+            return true;
+        }
+
+        let Some(text) = self.focused_text() else {
+            return false;
+        };
+        let Some((prev_idx, _)) = text[..head].char_indices().next_back() else {
             return false;
         };
 
-        let Some((next, _)) = current.char_indices().next_back() else {
+        let block = &mut self.blocks[index];
+        if shift && block.cursor.anchor.is_none() {
+            block.cursor.anchor = Some(head);
+        }
+        block.cursor.head = prev_idx;
+        if !shift {
+            block.cursor.anchor = None;
+        }
+        true
+    }
+
+    pub fn move_cursor_right(&mut self, shift: bool) -> bool {
+        let index = self.focused_block;
+        let head = self.blocks[index].cursor.head;
+        let anchor = self.blocks[index].cursor.anchor;
+
+        if !shift && anchor.is_some() {
+            self.blocks[index].cursor.head = head.max(anchor.unwrap());
+            self.blocks[index].cursor.anchor = None;
+            return true;
+        }
+
+        let Some(text) = self.focused_text() else {
+            return false;
+        };
+        if head >= text.len() {
+            return false;
+        }
+
+        let ch = text[head..].chars().next().unwrap();
+        let next_idx = head + ch.len_utf8();
+
+        let block = &mut self.blocks[index];
+        if shift && block.cursor.anchor.is_none() {
+            block.cursor.anchor = Some(head);
+        }
+        block.cursor.head = next_idx;
+        if !shift {
+            block.cursor.anchor = None;
+        }
+        true
+    }
+
+    pub fn select_all(&mut self) -> bool {
+        let index = self.focused_block;
+        let text_len = if let Some(text) = self.focused_text() {
+            if text.is_empty() {
+                return false;
+            }
+            text.len()
+        } else {
             return false;
         };
 
-        self.set_focused_draft(current[..next].to_string())
+        let block = &mut self.blocks[index];
+        block.cursor.anchor = Some(0);
+        block.cursor.head = text_len;
+        true
     }
 
     pub fn revert_focused_draft(&mut self) -> bool {
@@ -533,6 +694,7 @@ fn new_block(id: usize, kind: BlockKind, source: impl Into<String>) -> DocumentB
         rendered,
         html,
         draft: None,
+        cursor: CursorState::default(),
     }
 }
 
@@ -887,6 +1049,18 @@ impl DocumentModel {
             block.id = index;
             block.rendered = render_block_source(&block.kind, &block.source);
             block.html = adapt_block_html(&block.kind, &block.source);
+
+            // Bounds check for cursor
+            let text = block.draft.as_deref().unwrap_or(&block.source);
+            let len = text.len();
+            if block.cursor.head > len {
+                block.cursor.head = len;
+            }
+            if let Some(anchor) = block.cursor.anchor {
+                if anchor > len {
+                    block.cursor.anchor = Some(len);
+                }
+            }
         }
         self.source = serialize_blocks(&self.blocks);
         self.outline = build_outline(&self.source);
@@ -992,10 +1166,48 @@ fn main() {}
         let mut document = DocumentModel::from_markdown("# Title\n\nParagraph");
 
         assert!(document.focus_block(1));
+        // Move cursor to end before typing if we want to append
+        assert!(document.move_cursor_right(false)); // P
+        assert!(document.move_cursor_right(false)); // a
+        assert!(document.move_cursor_right(false)); // r
+        assert!(document.move_cursor_right(false)); // a
+        assert!(document.move_cursor_right(false)); // g
+        assert!(document.move_cursor_right(false)); // r
+        assert!(document.move_cursor_right(false)); // a
+        assert!(document.move_cursor_right(false)); // p
+        assert!(document.move_cursor_right(false)); // h
+
         assert!(document.push_char_to_focused_draft('!'));
         assert_eq!(document.focused_text(), Some("Paragraph!"));
-        assert!(document.delete_last_char_from_focused_draft());
+        assert!(document.delete_at_cursor_in_focused_draft());
         assert_eq!(document.focused_text(), Some("Paragraph"));
+    }
+
+    #[test]
+    fn cursor_navigation_and_selection() {
+        let mut document = DocumentModel::from_markdown("ABC");
+        assert_eq!(document.focused_cursor().unwrap().head, 0);
+
+        assert!(document.move_cursor_right(false));
+        assert_eq!(document.focused_cursor().unwrap().head, 1);
+
+        assert!(document.move_cursor_right(true)); // Select 'B'
+        assert_eq!(document.focused_cursor().unwrap().head, 2);
+        assert_eq!(document.focused_cursor().unwrap().anchor, Some(1));
+
+        assert!(document.push_char_to_focused_draft('X')); // Replace 'B' with 'X'
+        assert_eq!(document.focused_text(), Some("AXC"));
+        assert_eq!(document.focused_cursor().unwrap().head, 2);
+        assert_eq!(document.focused_cursor().unwrap().anchor, None);
+    }
+
+    #[test]
+    fn select_all_works() {
+        let mut document = DocumentModel::from_markdown("Hello");
+        assert!(document.select_all());
+        let cursor = document.focused_cursor().unwrap();
+        assert_eq!(cursor.anchor, Some(0));
+        assert_eq!(cursor.head, 5);
     }
 
     #[test]
@@ -1035,7 +1247,7 @@ fn main() {}
         let mut document = DocumentModel::from_markdown("# Title\n\nParagraph");
 
         assert!(document.focus_block(1));
-        assert!(document.push_char_to_focused_draft('!'));
+        assert!(document.append_to_focused_draft("!"));
         assert_eq!(document.focused_text(), Some("Paragraph!"));
         assert!(document.can_undo());
 
@@ -1074,11 +1286,11 @@ fn main() {}
         let mut document = DocumentModel::from_markdown("# Title\n\nParagraph");
 
         assert!(document.focus_block(1));
-        assert!(document.push_char_to_focused_draft('!'));
+        assert!(document.append_to_focused_draft("!"));
         assert!(document.undo());
         assert!(document.can_redo());
 
-        assert!(document.push_char_to_focused_draft('?'));
+        assert!(document.append_to_focused_draft("?"));
         assert!(!document.can_redo());
         assert_eq!(document.focused_text(), Some("Paragraph?"));
     }

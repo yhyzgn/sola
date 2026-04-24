@@ -19,6 +19,8 @@ pub struct ThemePalette {
     pub focused_background: String,
     pub focused_border: String,
     pub code_background: String,
+    pub selection: String,
+    pub cursor: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +56,8 @@ impl Theme {
                 focused_background: "#1d2330".into(),
                 focused_border: "#c084fc".into(),
                 code_background: "#111827".into(),
+                selection: "#3e4451".into(),
+                cursor: "#ffffff".into(),
             },
             typography: ThemeTypography {
                 ui_scale: 100,
@@ -86,6 +90,8 @@ impl Theme {
                 focused_background: "#f3e8ff".into(),
                 focused_border: "#8b5cf6".into(),
                 code_background: "#eef2ff".into(),
+                selection: "#dbeafe".into(),
+                cursor: "#000000".into(),
             },
             typography: ThemeTypography {
                 ui_scale: 100,
@@ -149,6 +155,8 @@ accent = "#7c3aed"
 focused_background = "#18181b"
 focused_border = "#c084fc"
 code_background = "#09090b"
+selection = "#3e4451"
+cursor = "#ffffff"
 
 [typography]
 ui_scale = 100

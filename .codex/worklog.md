@@ -188,3 +188,16 @@
     - `cargo check`
     - `cargo test --workspace`
     - `timeout 10s cargo run`
+39. 完成代码提交与推送：
+    - Commit Message 详述了 HTML adapter 与 Tree-sitter 的实现决策。
+    - 推送至远程仓库 `main` 分支。
+40. 推进 Focused Block 内部的光标定位与选区逻辑：
+    - `sola-document` 引入 `CursorState` 模型，并实现基于光标的字符插入、文本块删除、左右移动与全选逻辑。
+    - `sola-theme` 补充 `selection` 与 `cursor` 语义色。
+    - `sola-app` 改造 `render_highlighted_text` 渲染管线，支持在语法高亮片段中切分并插入闪烁光标（稳定版）与选区背景。
+    - `sola-app` 接入 `Left` / `Right` / `Shift+Left/Right` / `Ctrl+A` 快捷键，并同步更新快捷键提示条。
+41. 本轮修改后再次完成强校验：
+    - `cargo fmt --all`
+    - `cargo check`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`
