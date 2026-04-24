@@ -5,6 +5,7 @@ members = [
     "crates/sola-core",
     "crates/sola-document",
     "crates/sola-theme",
+    "crates/sola-typst",
 ]
 resolver = "2"
 

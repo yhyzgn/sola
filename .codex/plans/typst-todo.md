@@ -1,0 +1,5 @@
+- [ ] Task 1: Initialize sola-typst Crate
+- [ ] Task 2: Implement Typst World and Font Provider
+- [ ] Task 3: Extend sola-document Model
+- [ ] Task 4: Integrate Background Rendering in sola-app
+- [ ] Task 5: Final Validation and Polish
