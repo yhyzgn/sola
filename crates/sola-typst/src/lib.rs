@@ -1,13 +1,13 @@
 use std::sync::OnceLock;
 use thiserror::Error;
-use typst::diag::{FileError, FileResult};
-use typst::foundations::{Bytes, Datetime};
-use typst::syntax::{FileId, Source};
-use typst::text::{Font, FontBook};
 use typst::Library;
 use typst::World;
-use typst::utils::LazyHash;
+use typst::diag::{FileError, FileResult};
+use typst::foundations::{Bytes, Datetime};
 use typst::layout::PagedDocument;
+use typst::syntax::{FileId, Source};
+use typst::text::{Font, FontBook};
+use typst::utils::LazyHash;
 
 #[derive(Error, Debug)]
 pub enum TypstError {
@@ -101,16 +101,14 @@ pub fn compile_to_svg(source: &str, kind: RenderKind) -> Result<String, TypstErr
     };
 
     let world = SolaWorld::new(&full_source);
-    let document: PagedDocument = typst::compile(&world)
-        .output
-        .map_err(|errs| {
-            TypstError::Compile(
-                errs.into_iter()
-                    .map(|e| e.message.clone())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            )
-        })?;
+    let document: PagedDocument = typst::compile(&world).output.map_err(|errs| {
+        TypstError::Compile(
+            errs.into_iter()
+                .map(|e| e.message.clone())
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
+    })?;
 
     let svg = typst_svg::svg(&document.pages[0]);
     Ok(svg)

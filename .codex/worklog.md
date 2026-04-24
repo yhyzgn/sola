@@ -219,3 +219,30 @@
 45. 验证：
     - `cargo check --workspace`
     - `timeout 10s cargo run`
+46. 完成 Phase 4 的 `sola-document` / `sola-app` 集成：
+    - `sola-document` 新增 `MathBlock` / `TypstBlock` 与 `TypstAdapter::{Pending, Rendered, Error}`。
+    - `sola-document` 解析器现可识别 `$$...$$`、多行 `$$` 数学块以及 ````typst```` 代码块。
+    - `sola-document` 为 Math/Typst block 维护初始 `Pending` 状态，并在 `rebuild_metadata` 后重新补齐。
+    - 为 `sola-document` 增补了针对 parser、状态初始化和 `rebuild_metadata` 的 TDD 回归测试。
+47. 在 `sola-app` 接通后台 Typst 渲染与前台预览：
+    - `sola-app` 新增 `sola-typst` 依赖，并实现 `typst_render_request` / `apply_typst_result` 两个可测试 helper。
+    - `SolaRoot` 新增后台渲染队列，针对 `TypstAdapter::Pending` 块触发 `compile_to_svg`。
+    - 渲染完成后回写 `Rendered` / `Error` 状态；对于结构编辑导致的陈旧结果，按 block index + source 做丢弃保护。
+    - 由于 GPUI `svg()` 元素依赖 asset path，改用 `img(Image::from_bytes(ImageFormat::Svg, ...))` 展示内存 SVG。
+    - 样例文档新增数学公式与 Typst block，便于后续手工验证。
+48. 本轮修改后完成强校验：
+    - `cargo fmt --all`
+    - `cargo test -p sola-document`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `cargo run`（本环境下可编译并进入运行态）
+49. 完成“行内数学公式”阶段：
+    - `sola-document` 为 paragraph / list / quote 中的 `$...$` 增加检测逻辑，并复用现有 `TypstAdapter` 状态机。
+    - `sola-app` 扩展 `typst_render_request`，使 paragraph-like block 也可走 `RenderKind::Block`。
+    - `sola-app` 在 blurred 态下对带行内数学的段落型 block 直接展示整块 Typst SVG 预览。
+    - 样例文档新增 inline math 例子，便于运行态观察。
+50. 行内数学阶段验证：
+    - `cargo test -p sola-document`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）

@@ -1,12 +1,17 @@
 use gpui::{
-    AppContext, Application, Bounds, Context, Div, FocusHandle, FontWeight, Hsla,
-    InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled,
-    Window, WindowBounds, WindowOptions, div, px, rgb, size,
+    AppContext, Application, AsyncApp, Bounds, Context, Div, FocusHandle, FontWeight, Hsla, Image,
+    ImageFormat, InteractiveElement, IntoElement, ParentElement, Render,
+    StatefulInteractiveElement, Styled, WeakEntity, Window, WindowBounds, WindowOptions, div, img,
+    px, rgb, size,
 };
 use sola_core::{APP_NAME, APP_TAGLINE, ROADMAP_PHASES, sample_markdown};
 use sola_document::highlighter::{HighlightKind, SyntaxHighlighter};
-use sola_document::{BlockKind, CursorState, DocumentBlock, DocumentModel, HtmlAdapter, HtmlNode};
+use sola_document::{
+    BlockKind, CursorState, DocumentBlock, DocumentModel, HtmlAdapter, HtmlNode, TypstAdapter,
+};
 use sola_theme::{Theme, parse_hex_color};
+use sola_typst::{RenderKind, TypstError, compile_to_svg};
+use std::{collections::HashSet, sync::Arc};
 #[cfg(target_os = "linux")]
 use std::{
     env,
@@ -45,6 +50,7 @@ struct SolaRoot {
     theme: Theme,
     document: DocumentModel,
     highlighter: SyntaxHighlighter,
+    typst_in_flight: HashSet<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +67,7 @@ impl SolaRoot {
             theme: Theme::sola_dark(),
             document: DocumentModel::from_markdown(sample_markdown()),
             highlighter: SyntaxHighlighter::new_rust(),
+            typst_in_flight: HashSet::new(),
         }
     }
 
@@ -218,7 +225,8 @@ impl SolaRoot {
             ))
     }
 
-    fn render_document_surface(&self, cx: &mut Context<Self>) -> Div {
+    fn render_document_surface(&mut self, cx: &mut Context<Self>) -> Div {
+        self.trigger_typst_renders(cx);
         let blocks = self.document.blocks().iter().enumerate().fold(
             div().flex().flex_col().gap(px(14.0)).p(px(24.0)),
             |surface, (index, block)| surface.child(self.render_block(index, block, cx)),
@@ -461,11 +469,17 @@ impl SolaRoot {
                         .font_weight(FontWeight::BOLD)
                         .child(block.rendered.clone()),
                 ),
-            BlockKind::Paragraph => self.render_textual_block(
-                block,
-                self.theme.typography.body_size as f32,
-                &self.theme.palette.text_primary,
-            ),
+            BlockKind::Paragraph => {
+                if block.typst.is_some() {
+                    self.render_typst_preview(block, "Paragraph")
+                } else {
+                    self.render_textual_block(
+                        block,
+                        self.theme.typography.body_size as f32,
+                        &self.theme.palette.text_primary,
+                    )
+                }
+            }
             BlockKind::ListItem { ordered } => div()
                 .flex()
                 .gap(px(10.0))
@@ -475,20 +489,28 @@ impl SolaRoot {
                         .font_weight(FontWeight::BOLD)
                         .child(if *ordered { "1." } else { "•" }),
                 )
-                .child(self.render_textual_block(
-                    block,
-                    self.theme.typography.body_size as f32,
-                    &self.theme.palette.text_primary,
-                )),
+                .child(if block.typst.is_some() {
+                    self.render_typst_preview(block, "List item")
+                } else {
+                    self.render_textual_block(
+                        block,
+                        self.theme.typography.body_size as f32,
+                        &self.theme.palette.text_primary,
+                    )
+                }),
             BlockKind::Quote => div()
                 .pl(px(14.0))
                 .border_l_2()
                 .border_color(rgb_hex(&self.theme.palette.accent))
-                .child(self.render_textual_block(
-                    block,
-                    self.theme.typography.body_size as f32,
-                    &self.theme.palette.text_muted,
-                )),
+                .child(if block.typst.is_some() {
+                    self.render_typst_preview(block, "Quote")
+                } else {
+                    self.render_textual_block(
+                        block,
+                        self.theme.typography.body_size as f32,
+                        &self.theme.palette.text_muted,
+                    )
+                }),
             BlockKind::CodeFence { language } => div()
                 .flex()
                 .flex_col()
@@ -512,6 +534,102 @@ impl SolaRoot {
                         .rounded(px(10.0))
                         .child(self.render_highlighted_text(&block.rendered, 13.0, None)),
                 ),
+            BlockKind::MathBlock => self.render_typst_preview(block, "Math block"),
+            BlockKind::TypstBlock => self.render_typst_preview(block, "Typst block"),
+        }
+    }
+
+    fn render_typst_preview(&self, block: &DocumentBlock, label: &str) -> Div {
+        let preview_height = match block.kind {
+            BlockKind::MathBlock | BlockKind::TypstBlock => 160.0,
+            BlockKind::Heading { .. }
+            | BlockKind::Paragraph
+            | BlockKind::ListItem { .. }
+            | BlockKind::Quote
+            | BlockKind::CodeFence { .. } => 56.0,
+        };
+
+        match block.typst.as_ref() {
+            Some(TypstAdapter::Pending) => div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(rgb_hex(&self.theme.palette.text_muted))
+                        .child(format!("{label} · rendering")),
+                )
+                .child(
+                    div()
+                        .p(px(14.0))
+                        .bg(rgb_hex(&self.theme.palette.code_background))
+                        .rounded(px(10.0))
+                        .text_size(px(13.0))
+                        .text_color(rgb_hex(&self.theme.palette.text_muted))
+                        .child("Rendering Typst preview..."),
+                ),
+            Some(TypstAdapter::Rendered { svg }) => div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(rgb_hex(&self.theme.palette.text_muted))
+                        .child(format!("{label} · rendered")),
+                )
+                .child(
+                    div()
+                        .p(px(14.0))
+                        .bg(rgb_hex(&self.theme.palette.code_background))
+                        .rounded(px(10.0))
+                        .border_1()
+                        .border_color(rgb_hex(&self.theme.palette.panel_border))
+                        .child(
+                            img(Arc::new(Image::from_bytes(
+                                ImageFormat::Svg,
+                                svg.as_bytes().to_vec(),
+                            )))
+                            .w_full()
+                            .h(px(preview_height)),
+                        ),
+                ),
+            Some(TypstAdapter::Error { message }) => div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(rgb_hex(&self.theme.palette.text_muted))
+                        .child(format!("{label} · error")),
+                )
+                .child(
+                    div()
+                        .p(px(14.0))
+                        .bg(rgb_hex(&self.theme.palette.code_background))
+                        .rounded(px(10.0))
+                        .border_1()
+                        .border_color(rgb_hex(&self.theme.palette.panel_border))
+                        .child(
+                            div()
+                                .text_size(px(13.0))
+                                .text_color(rgb_hex("#ff6b6b"))
+                                .child(message.clone()),
+                        )
+                        .child(
+                            div()
+                                .mt(px(10.0))
+                                .text_size(px(12.0))
+                                .text_color(rgb_hex(&self.theme.palette.text_muted))
+                                .child(block.rendered.clone()),
+                        ),
+                ),
+            None => div()
+                .text_size(px(self.theme.typography.body_size as f32))
+                .text_color(rgb_hex(&self.theme.palette.text_primary))
+                .child(block.rendered.clone()),
         }
     }
 
@@ -784,6 +902,73 @@ impl SolaRoot {
 }
 
 impl SolaRoot {
+    fn trigger_typst_renders(&mut self, cx: &mut Context<Self>) {
+        let requests = self
+            .document
+            .blocks()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, block)| {
+                if self.typst_in_flight.contains(&index) {
+                    return None;
+                }
+
+                let Some(TypstAdapter::Pending) = block.typst.as_ref() else {
+                    return None;
+                };
+
+                typst_render_request(block)
+                    .map(|(kind, source)| (index, block.source.clone(), kind, source))
+            })
+            .collect::<Vec<_>>();
+
+        for (index, block_source, kind, source) in requests {
+            self.typst_in_flight.insert(index);
+            cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
+                let background = cx.background_executor().clone();
+                let mut async_cx = cx.clone();
+
+                async move {
+                    let result = background
+                        .spawn(async move { compile_to_svg(&source, kind) })
+                        .await;
+
+                    let _ = this.update(&mut async_cx, |this, cx| {
+                        this.typst_in_flight.remove(&index);
+
+                        let Some(current_block) = this.document.blocks().get(index) else {
+                            return;
+                        };
+
+                        if current_block.source != block_source {
+                            return;
+                        }
+
+                        let previous_focus = this.document.focused_block();
+                        if !this.document.focus_block(index) {
+                            return;
+                        }
+
+                        let updated = this
+                            .document
+                            .focused_block_mut()
+                            .map(|block| apply_typst_result(block, result))
+                            .unwrap_or(false);
+
+                        let restore_index =
+                            previous_focus.min(this.document.block_count().saturating_sub(1));
+                        let _ = this.document.focus_block(restore_index);
+
+                        if updated {
+                            cx.notify();
+                        }
+                    });
+                }
+            })
+            .detach();
+        }
+    }
+
     fn handle_focused_key_down(&mut self, event: &gpui::KeyDownEvent) -> bool {
         let key = event.keystroke.key.as_str();
         let modifiers = &event.keystroke.modifiers;
@@ -1055,6 +1240,38 @@ fn truncate_for_pill(input: &str, max_chars: usize) -> String {
     output
 }
 
+fn typst_render_request(block: &DocumentBlock) -> Option<(RenderKind, String)> {
+    match block.kind {
+        BlockKind::MathBlock => Some((RenderKind::Math, block.rendered.clone())),
+        BlockKind::TypstBlock => Some((RenderKind::Block, block.rendered.clone())),
+        BlockKind::Paragraph | BlockKind::ListItem { .. } | BlockKind::Quote
+            if block.typst.is_some() =>
+        {
+            Some((RenderKind::Block, block.rendered.clone()))
+        }
+        BlockKind::Heading { .. }
+        | BlockKind::Paragraph
+        | BlockKind::ListItem { .. }
+        | BlockKind::Quote
+        | BlockKind::CodeFence { .. } => None,
+    }
+}
+
+fn apply_typst_result(block: &mut DocumentBlock, result: Result<String, TypstError>) -> bool {
+    if block.typst.is_none() {
+        return false;
+    }
+
+    block.typst = Some(match result {
+        Ok(svg) => TypstAdapter::Rendered { svg },
+        Err(error) => TypstAdapter::Error {
+            message: error.to_string(),
+        },
+    });
+
+    true
+}
+
 #[cfg(target_os = "linux")]
 fn ensure_linux_display_backend() -> Result<(), String> {
     if wayland_socket_reachable() || x11_socket_reachable() {
@@ -1111,6 +1328,9 @@ fn unix_socket_reachable(path: &Path) -> bool {
 mod tests {
     #[cfg(target_os = "linux")]
     use super::unix_socket_reachable;
+    use super::{apply_typst_result, typst_render_request};
+    use sola_document::{DocumentModel, TypstAdapter};
+    use sola_typst::{RenderKind, TypstError};
     #[cfg(target_os = "linux")]
     use std::path::Path;
 
@@ -1120,5 +1340,64 @@ mod tests {
         assert!(!unix_socket_reachable(Path::new(
             "/tmp/sola-missing-socket"
         )));
+    }
+
+    #[test]
+    fn typst_render_request_maps_supported_blocks_to_jobs() {
+        let math = DocumentModel::from_markdown("$$a + b$$");
+        let typst = DocumentModel::from_markdown(
+            r#"```typst
+#set text(fill: red)
+Hello
+```"#,
+        );
+        let plain = DocumentModel::from_markdown("plain paragraph");
+
+        let Some((math_kind, math_source)) = typst_render_request(&math.blocks()[0]) else {
+            panic!("expected math render request");
+        };
+        assert!(matches!(math_kind, RenderKind::Math));
+        assert_eq!(math_source, "a + b");
+
+        let Some((typst_kind, typst_source)) = typst_render_request(&typst.blocks()[0]) else {
+            panic!("expected typst render request");
+        };
+        assert!(matches!(typst_kind, RenderKind::Block));
+        assert_eq!(typst_source, "#set text(fill: red)\nHello");
+
+        assert!(typst_render_request(&plain.blocks()[0]).is_none());
+    }
+
+    #[test]
+    fn apply_typst_result_updates_block_render_state() {
+        let mut document = DocumentModel::from_markdown("$$a + b$$");
+        let block = document.focused_block_mut().unwrap();
+
+        assert!(apply_typst_result(block, Ok("<svg />".to_string())));
+        assert!(matches!(
+            block.typst,
+            Some(TypstAdapter::Rendered { ref svg }) if svg == "<svg />"
+        ));
+
+        assert!(apply_typst_result(
+            block,
+            Err(TypstError::Compile("bad typst".to_string()))
+        ));
+        assert!(matches!(
+            block.typst,
+            Some(TypstAdapter::Error { ref message }) if message.contains("bad typst")
+        ));
+    }
+
+    #[test]
+    fn typst_render_request_maps_inline_math_paragraphs_to_block_jobs() {
+        let document = DocumentModel::from_markdown("Paragraph with $a + b$ inline math.");
+
+        let Some((kind, source)) = typst_render_request(&document.blocks()[0]) else {
+            panic!("expected inline math render request");
+        };
+
+        assert!(matches!(kind, RenderKind::Block));
+        assert_eq!(source, "Paragraph with $a + b$ inline math.");
     }
 }

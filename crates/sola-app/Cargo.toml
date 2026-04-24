@@ -11,3 +11,4 @@ gpui.workspace = true
 sola-core = { path = "../sola-core" }
 sola-document = { path = "../sola-document" }
 sola-theme = { path = "../sola-theme" }
+sola-typst = { path = "../sola-typst" }

@@ -41,5 +41,20 @@ Inline safe HTML keeps structure instead of forcing a webview:
 
 Whitelisted images surface layout metadata for native rendering:
 <img src="architecture-sketch.png" alt="Architecture sketch" width="320" />
+
+## Typst previews
+
+Inline math should render inside paragraphs, like $e^(i pi) + 1 = 0$.
+
+$$
+sum_(i = 1)^n i = (n * (n + 1)) / 2
+$$
+
+```typst
+#set text(fill: blue)
+#align(center)[
+  *Typst block preview*
+]
+```
 "#
 }

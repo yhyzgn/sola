@@ -9,6 +9,8 @@ pub enum BlockKind {
     ListItem { ordered: bool },
     Quote,
     CodeFence { language: Option<String> },
+    MathBlock,
+    TypstBlock,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +41,13 @@ pub enum HtmlAdapter {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypstAdapter {
+    Pending,
+    Rendered { svg: String },
+    Error { message: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorState {
     pub head: usize,
     pub anchor: Option<usize>,
@@ -60,6 +69,7 @@ pub struct DocumentBlock {
     pub source: String,
     pub rendered: String,
     pub html: Option<HtmlAdapter>,
+    pub typst: Option<TypstAdapter>,
     pub draft: Option<String>,
     pub cursor: CursorState,
 }
@@ -502,6 +512,8 @@ impl BlockKind {
             BlockKind::ListItem { .. } => "list",
             BlockKind::Quote => "quote",
             BlockKind::CodeFence { .. } => "code",
+            BlockKind::MathBlock => "math",
+            BlockKind::TypstBlock => "typst",
         }
     }
 }
@@ -511,6 +523,8 @@ fn parse_blocks(source: &str) -> Vec<DocumentBlock> {
     let mut paragraph_lines: Vec<String> = Vec::new();
     let mut code_lines: Vec<String> = Vec::new();
     let mut code_language: Option<String> = None;
+    let mut math_lines: Vec<String> = Vec::new();
+    let mut in_math_block = false;
 
     let flush_paragraph = |blocks: &mut Vec<DocumentBlock>, paragraph_lines: &mut Vec<String>| {
         if paragraph_lines.is_empty() {
@@ -531,17 +545,45 @@ fn parse_blocks(source: &str) -> Vec<DocumentBlock> {
     for raw_line in source.lines() {
         let line = raw_line.trim_end();
 
+        if in_math_block {
+            if line.trim() == "$$" {
+                let id = blocks.len();
+                let math = math_lines.join("\n");
+                blocks.push(new_block(
+                    id,
+                    BlockKind::MathBlock,
+                    format!("$$\n{}\n$$", math),
+                ));
+                math_lines.clear();
+                in_math_block = false;
+                continue;
+            }
+
+            math_lines.push(line.to_string());
+            continue;
+        }
+
         if code_language.is_some() {
             if line.trim_start().starts_with("```") {
                 let id = blocks.len();
                 let code = code_lines.join("\n");
-                blocks.push(new_block(
-                    id,
-                    BlockKind::CodeFence {
-                        language: code_language.take(),
-                    },
-                    format!("```\n{}\n```", code),
-                ));
+                let language = code_language.take();
+                let (kind, source) = match language {
+                    Some(language) if language == "typst" => {
+                        (BlockKind::TypstBlock, format!("```typst\n{}\n```", code))
+                    }
+                    Some(language) => (
+                        BlockKind::CodeFence {
+                            language: Some(language.clone()),
+                        },
+                        format!("```{}\n{}\n```", language, code),
+                    ),
+                    None => (
+                        BlockKind::CodeFence { language: None },
+                        format!("```\n{}\n```", code),
+                    ),
+                };
+                blocks.push(new_block(id, kind, source));
                 code_lines.clear();
                 continue;
             }
@@ -607,18 +649,53 @@ fn parse_blocks(source: &str) -> Vec<DocumentBlock> {
             continue;
         }
 
+        if let Some(math) = parse_single_line_math_block(line) {
+            flush_paragraph(&mut blocks, &mut paragraph_lines);
+            let id = blocks.len();
+            let _ = math;
+            blocks.push(new_block(id, BlockKind::MathBlock, line.trim().to_string()));
+            continue;
+        }
+
+        if line.trim() == "$$" {
+            flush_paragraph(&mut blocks, &mut paragraph_lines);
+            in_math_block = true;
+            math_lines.clear();
+            continue;
+        }
+
         paragraph_lines.push(line.to_string());
     }
 
     if code_language.is_some() {
         let id = blocks.len();
         let code = code_lines.join("\n");
+        let language = code_language.take();
+        let (kind, source) = match language {
+            Some(language) if language == "typst" => {
+                (BlockKind::TypstBlock, format!("```typst\n{}\n```", code))
+            }
+            Some(language) => (
+                BlockKind::CodeFence {
+                    language: Some(language.clone()),
+                },
+                format!("```{}\n{}\n```", language, code),
+            ),
+            None => (
+                BlockKind::CodeFence { language: None },
+                format!("```\n{}\n```", code),
+            ),
+        };
+        blocks.push(new_block(id, kind, source));
+    }
+
+    if in_math_block {
+        let id = blocks.len();
+        let math = math_lines.join("\n");
         blocks.push(new_block(
             id,
-            BlockKind::CodeFence {
-                language: code_language.take(),
-            },
-            format!("```\n{}\n```", code),
+            BlockKind::MathBlock,
+            format!("$$\n{}\n$$", math),
         ));
     }
 
@@ -668,6 +745,8 @@ fn build_stats(blocks: &[DocumentBlock]) -> DocumentStats {
             BlockKind::ListItem { .. } => stats.list_items += 1,
             BlockKind::Quote => stats.quotes += 1,
             BlockKind::CodeFence { .. } => stats.code_blocks += 1,
+            BlockKind::TypstBlock => stats.code_blocks += 1,
+            BlockKind::MathBlock => {}
         }
     }
 
@@ -686,6 +765,7 @@ fn new_block(id: usize, kind: BlockKind, source: impl Into<String>) -> DocumentB
     let source = source.into();
     let rendered = render_block_source(&kind, &source);
     let html = adapt_block_html(&kind, &source);
+    let typst = typst_adapter_for_block(&kind, &rendered);
 
     DocumentBlock {
         id,
@@ -693,6 +773,7 @@ fn new_block(id: usize, kind: BlockKind, source: impl Into<String>) -> DocumentB
         source,
         rendered,
         html,
+        typst,
         draft: None,
         cursor: CursorState::default(),
     }
@@ -721,13 +802,27 @@ fn render_block_source(kind: &BlockKind, source: &str) -> String {
                 .strip_prefix("> ")
                 .unwrap_or(source.trim()),
         ),
-        BlockKind::CodeFence { .. } => source
-            .lines()
-            .skip(1)
-            .take_while(|line| !line.trim_start().starts_with("```"))
-            .collect::<Vec<_>>()
-            .join("\n"),
+        BlockKind::CodeFence { .. } | BlockKind::TypstBlock => render_fenced_block_source(source),
+        BlockKind::MathBlock => render_math_block_source(source),
     }
+}
+
+fn render_fenced_block_source(source: &str) -> String {
+    source
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.trim_start().starts_with("```"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_math_block_source(source: &str) -> String {
+    source
+        .trim()
+        .strip_prefix("$$")
+        .and_then(|body| body.strip_suffix("$$"))
+        .map(|body| body.trim().to_string())
+        .unwrap_or_else(|| source.trim().to_string())
 }
 
 fn render_paragraph_like_source(source: &str) -> String {
@@ -740,7 +835,26 @@ fn render_paragraph_like_source(source: &str) -> String {
 fn adapt_block_html(kind: &BlockKind, source: &str) -> Option<HtmlAdapter> {
     match kind {
         BlockKind::Paragraph | BlockKind::ListItem { .. } | BlockKind::Quote => adapt_html(source),
-        BlockKind::Heading { .. } | BlockKind::CodeFence { .. } => None,
+        BlockKind::Heading { .. }
+        | BlockKind::CodeFence { .. }
+        | BlockKind::MathBlock
+        | BlockKind::TypstBlock => None,
+    }
+}
+
+fn typst_adapter_for_block(kind: &BlockKind, rendered: &str) -> Option<TypstAdapter> {
+    match kind {
+        BlockKind::MathBlock | BlockKind::TypstBlock => Some(TypstAdapter::Pending),
+        BlockKind::Paragraph | BlockKind::ListItem { .. } | BlockKind::Quote
+            if contains_inline_math(rendered) =>
+        {
+            Some(TypstAdapter::Pending)
+        }
+        BlockKind::Heading { .. }
+        | BlockKind::Paragraph
+        | BlockKind::ListItem { .. }
+        | BlockKind::Quote
+        | BlockKind::CodeFence { .. } => None,
     }
 }
 
@@ -1009,6 +1123,56 @@ fn parse_ordered_list_item(line: &str) -> Option<&str> {
     rest.strip_prefix(". ")
 }
 
+fn parse_single_line_math_block(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    let body = trimmed.strip_prefix("$$")?.strip_suffix("$$")?.trim();
+    (!body.is_empty()).then_some(body)
+}
+
+fn contains_inline_math(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            index += 2;
+            continue;
+        }
+
+        if bytes[index] == b'$' {
+            if index + 1 < bytes.len() && bytes[index + 1] == b'$' {
+                index += 2;
+                continue;
+            }
+
+            let start = index + 1;
+            let mut inner = start;
+            while inner < bytes.len() {
+                if bytes[inner] == b'\\' {
+                    inner += 2;
+                    continue;
+                }
+
+                if bytes[inner] == b'$' {
+                    if inner > start {
+                        return true;
+                    }
+                    break;
+                }
+
+                inner += 1;
+            }
+
+            index = inner.saturating_add(1);
+            continue;
+        }
+
+        index += 1;
+    }
+
+    false
+}
+
 fn heading_level_to_u8(level: HeadingLevel) -> u8 {
     match level {
         HeadingLevel::H1 => 1,
@@ -1049,6 +1213,7 @@ impl DocumentModel {
             block.id = index;
             block.rendered = render_block_source(&block.kind, &block.source);
             block.html = adapt_block_html(&block.kind, &block.source);
+            block.typst = typst_adapter_for_block(&block.kind, &block.rendered);
 
             // Bounds check for cursor
             let text = block.draft.as_deref().unwrap_or(&block.source);
@@ -1341,5 +1506,120 @@ fn main() {}
             document.blocks()[0].rendered,
             "<table><tr><td>cell</td></tr></table>"
         );
+    }
+
+    #[test]
+    fn markdown_parser_recognizes_math_and_typst_blocks() {
+        let document = DocumentModel::from_markdown(
+            r#"$$
+x^2 + y^2
+$$
+
+```typst
+#set text(fill: red)
+Hello
+```"#,
+        );
+
+        assert_eq!(document.blocks().len(), 2);
+        assert_eq!(document.blocks()[0].kind.label(), "math");
+        assert_eq!(document.blocks()[0].rendered, "x^2 + y^2");
+        assert_eq!(document.blocks()[1].kind.label(), "typst");
+        assert_eq!(document.blocks()[1].rendered, "#set text(fill: red)\nHello");
+    }
+
+    #[test]
+    fn markdown_parser_supports_single_line_math_blocks() {
+        let document = DocumentModel::from_markdown("$$e^(i pi) + 1 = 0$$");
+
+        assert_eq!(document.blocks().len(), 1);
+        assert_eq!(document.blocks()[0].kind.label(), "math");
+        assert_eq!(document.blocks()[0].rendered, "e^(i pi) + 1 = 0");
+    }
+
+    #[test]
+    fn math_and_typst_blocks_start_with_pending_render_state() {
+        let document = DocumentModel::from_markdown(
+            r#"$$a + b$$
+
+```typst
+#let accent = blue
+accent
+```
+
+```rust
+fn main() {}
+```"#,
+        );
+
+        assert!(matches!(
+            document.blocks()[0].typst,
+            Some(TypstAdapter::Pending)
+        ));
+        assert!(matches!(
+            document.blocks()[1].typst,
+            Some(TypstAdapter::Pending)
+        ));
+        assert!(document.blocks()[2].typst.is_none());
+    }
+
+    #[test]
+    fn rebuild_metadata_reinitializes_pending_typst_state() {
+        let mut document = DocumentModel::from_markdown("$$a + b$$");
+        document.focused_block_mut().unwrap().typst = None;
+
+        assert!(document.insert_paragraph_after_focused("tail paragraph"));
+        assert!(matches!(
+            document.blocks()[0].typst,
+            Some(TypstAdapter::Pending)
+        ));
+        assert!(document.blocks()[1].typst.is_none());
+    }
+
+    #[test]
+    fn inline_math_paragraph_like_blocks_start_with_pending_render_state() {
+        let document = DocumentModel::from_markdown(
+            r#"Paragraph with $a + b$ inline math.
+
+- List item with $c + d$
+
+> Quote with $e + f$
+
+Plain paragraph without math."#,
+        );
+
+        assert!(matches!(
+            document.blocks()[0].typst,
+            Some(TypstAdapter::Pending)
+        ));
+        assert!(matches!(
+            document.blocks()[1].typst,
+            Some(TypstAdapter::Pending)
+        ));
+        assert!(matches!(
+            document.blocks()[2].typst,
+            Some(TypstAdapter::Pending)
+        ));
+        assert!(document.blocks()[3].typst.is_none());
+    }
+
+    #[test]
+    fn rebuild_metadata_reinitializes_pending_inline_math_state() {
+        let mut document = DocumentModel::from_markdown("Paragraph with $a + b$ inline math.");
+        document.focused_block_mut().unwrap().typst = None;
+
+        assert!(document.insert_paragraph_after_focused("tail paragraph"));
+        assert!(matches!(
+            document.blocks()[0].typst,
+            Some(TypstAdapter::Pending)
+        ));
+        assert!(document.blocks()[1].typst.is_none());
+    }
+
+    #[test]
+    fn escaped_dollar_does_not_trigger_inline_math_render_state() {
+        let document = DocumentModel::from_markdown(r#"Price is \$42 today."#);
+
+        assert!(document.blocks()[0].typst.is_none());
     }
 }
