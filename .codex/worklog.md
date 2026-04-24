@@ -211,3 +211,11 @@
     - `cargo check`
     - `cargo test --workspace`
     - `timeout 10s cargo run`
+44. 启动 Phase 4：Typst 数学公式集成：
+    - 完成架构规格设计，确立 `sola-typst` crate 的创建和基于 `typst::World` 的在内存中的 SVG 编译流程。
+    - 落地实现 `sola-typst`，配置 Typst 依赖、加载 `typst_assets` 字体，完成底层的 `compile_to_svg` 逻辑。
+    - 将新模块纳入 cargo workspace 并完成测试。
+    - 计划记录并保存至 `.codex/plans/typst-todo.md`。
+45. 验证：
+    - `cargo check --workspace`
+    - `timeout 10s cargo run`
