@@ -1,6 +1,6 @@
 use gpui::{
     AppContext, Application, AsyncApp, Bounds, Context, Div, FocusHandle, FontWeight, Hsla, Image,
-    ImageFormat, InteractiveElement, IntoElement, ParentElement, Render,
+    ImageFormat, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
     StatefulInteractiveElement, Styled, WeakEntity, Window, WindowBounds, WindowOptions, div, img,
     px, rgb, size,
 };
@@ -420,10 +420,23 @@ impl SolaRoot {
                         .p(px(8.0))
                         .bg(rgb_hex(&self.theme.palette.code_background))
                         .rounded(px(8.0))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                                let end = this.document.focused_text().map(str::len).unwrap_or(0);
+                                let changed =
+                                    this.document.set_focused_cursor(end, event.modifiers.shift);
+                                cx.stop_propagation();
+                                if changed {
+                                    cx.notify();
+                                }
+                            }),
+                        )
                         .child(self.render_highlighted_text(
                             self.document.focused_text().unwrap_or(&block.source),
                             13.0,
                             self.document.focused_cursor(),
+                            Some(cx),
                         )),
                 )
         } else {
@@ -434,6 +447,10 @@ impl SolaRoot {
             .child(indicator)
             .child(content)
             .on_click(cx.listener(move |this, _event, window, cx| {
+                if this.document.focused_block() == index {
+                    return;
+                }
+
                 // Auto-apply draft before moving focus
                 if this.document.focused_has_draft() {
                     this.document.apply_focused_draft();
@@ -532,7 +549,7 @@ impl SolaRoot {
                         .p(px(14.0))
                         .bg(rgb_hex(&self.theme.palette.code_background))
                         .rounded(px(10.0))
-                        .child(self.render_highlighted_text(&block.rendered, 13.0, None)),
+                        .child(self.render_highlighted_text(&block.rendered, 13.0, None, None)),
                 ),
             BlockKind::MathBlock => self.render_typst_preview(block, "Math block"),
             BlockKind::TypstBlock => self.render_typst_preview(block, "Typst block"),
@@ -754,6 +771,7 @@ impl SolaRoot {
         text: &str,
         default_size: f32,
         cursor: Option<&CursorState>,
+        cx: Option<&Context<Self>>,
     ) -> Div {
         let spans = self.highlighter.highlight(text);
         let syntax = &self.theme.syntax;
@@ -813,6 +831,7 @@ impl SolaRoot {
                             p,
                             sel_start,
                             sel_end,
+                            cx,
                         ));
                     }
                     if p == head {
@@ -835,6 +854,7 @@ impl SolaRoot {
                         end,
                         sel_start,
                         sel_end,
+                        cx,
                     ));
                 }
             } else {
@@ -882,12 +902,43 @@ impl SolaRoot {
         end: usize,
         sel_start: Option<usize>,
         sel_end: Option<usize>,
+        cx: Option<&Context<Self>>,
     ) -> Div {
         let is_selected = if let (Some(s), Some(e)) = (sel_start, sel_end) {
             start >= s && end <= e
         } else {
             false
         };
+
+        if let Some(cx) = cx {
+            return clickable_chars(text, start).into_iter().fold(
+                div().flex().items_center().gap(px(0.0)),
+                |fragment, (offset, ch)| {
+                    let mut cell = div()
+                        .text_size(px(size))
+                        .text_color(rgb_hex(color))
+                        .child(ch.clone())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                                let changed = this
+                                    .document
+                                    .set_focused_cursor(offset, event.modifiers.shift);
+                                cx.stop_propagation();
+                                if changed {
+                                    cx.notify();
+                                }
+                            }),
+                        );
+
+                    if is_selected {
+                        cell = cell.bg(rgb_hex(&self.theme.palette.selection));
+                    }
+
+                    fragment.child(cell)
+                },
+            );
+        }
 
         let mut fragment = div()
             .text_size(px(size))
@@ -1272,6 +1323,12 @@ fn apply_typst_result(block: &mut DocumentBlock, result: Result<String, TypstErr
     true
 }
 
+fn clickable_chars(text: &str, start: usize) -> Vec<(usize, String)> {
+    text.char_indices()
+        .map(|(offset, ch)| (start + offset, ch.to_string()))
+        .collect()
+}
+
 #[cfg(target_os = "linux")]
 fn ensure_linux_display_backend() -> Result<(), String> {
     if wayland_socket_reachable() || x11_socket_reachable() {
@@ -1328,7 +1385,7 @@ fn unix_socket_reachable(path: &Path) -> bool {
 mod tests {
     #[cfg(target_os = "linux")]
     use super::unix_socket_reachable;
-    use super::{apply_typst_result, typst_render_request};
+    use super::{apply_typst_result, clickable_chars, typst_render_request};
     use sola_document::{DocumentModel, TypstAdapter};
     use sola_typst::{RenderKind, TypstError};
     #[cfg(target_os = "linux")]
@@ -1399,5 +1456,19 @@ Hello
 
         assert!(matches!(kind, RenderKind::Block));
         assert_eq!(source, "Paragraph with $a + b$ inline math.");
+    }
+
+    #[test]
+    fn clickable_chars_preserve_utf8_offsets() {
+        let chars = clickable_chars("a好b", 10);
+
+        assert_eq!(
+            chars,
+            vec![
+                (10, "a".to_string()),
+                (11, "好".to_string()),
+                (14, "b".to_string())
+            ]
+        );
     }
 }

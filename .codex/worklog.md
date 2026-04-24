@@ -246,3 +246,13 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+51. 完成“鼠标点击定位光标”阶段：
+    - `sola-document` 新增 `set_focused_cursor(offset, shift)`，用于统一处理点击后的光标更新、边界夹紧和 `Shift` 选区锚点。
+    - `sola-app` focused renderer 现在将可编辑文本拆分为按 UTF-8 边界对齐的可点击字符单元。
+    - 点击字符会将光标移动到对应边界，`Shift+Click` 会扩展选区；点击编辑背景会将光标移到当前 block 末尾。
+    - block container 点击逻辑增加“仅在切换 block 时才 auto-apply”的保护，避免点击当前 focused block 时误触发保存。
+52. 鼠标点击阶段验证：
+    - `cargo test -p sola-document`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）

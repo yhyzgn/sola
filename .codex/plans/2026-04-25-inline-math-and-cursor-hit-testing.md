@@ -29,11 +29,11 @@
 - Modify: `crates/sola-document/src/lib.rs`
 - Modify: `crates/sola-app/src/shell.rs`
 
-- [ ] Add failing tests in `sola-document` for setting cursor offsets directly and clamping them to text bounds.
-- [ ] Add failing `sola-app` tests for the coordinate-to-offset helper that mouse clicks will use.
-- [ ] Run the focused test commands and confirm the red step is real.
-- [ ] Implement document-level cursor setters plus app-side click-to-offset mapping and wire `on_mouse_down(MouseButton::Left, ...)` into the focused block renderer.
-- [ ] Run `cargo test -p sola-document`, `cargo test -p sola-app`, and then `cargo test --workspace` to verify the feature set is green.
+- [x] Add failing tests in `sola-document` for setting cursor offsets directly and clamping them to text bounds.
+- [x] Add failing `sola-app` tests for the coordinate-to-offset helper that mouse clicks will use.
+- [x] Run the focused test commands and confirm the red step is real.
+- [x] Implement document-level cursor setters plus app-side click-to-offset mapping and wire `on_mouse_down(MouseButton::Left, ...)` into the focused block renderer.
+- [x] Run `cargo test -p sola-document`, `cargo test -p sola-app`, and then `cargo test --workspace` to verify the feature set is green.
 
 ### Task 3: Final Verification And Handover
 
@@ -41,7 +41,7 @@
 - Modify: `.codex/04-current-status.md`
 - Modify: `.codex/worklog.md`
 
-- [ ] Run `cargo fmt --all`.
-- [ ] Run `cargo test --workspace`.
-- [ ] Run `cargo run` and confirm the current environment behavior is still clean.
-- [ ] Update `.codex` status and worklog with the inline math and mouse cursor milestones.
+- [x] Run `cargo fmt --all`.
+- [x] Run `cargo test --workspace`.
+- [x] Run `cargo run` and confirm the current environment behavior is still clean.
+- [x] Update `.codex` status and worklog with the inline math and mouse cursor milestones.

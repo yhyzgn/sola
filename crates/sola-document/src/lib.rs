@@ -229,6 +229,33 @@ impl DocumentModel {
         self.focused_block_ref().map(|b| &b.cursor)
     }
 
+    pub fn set_focused_cursor(&mut self, offset: usize, shift: bool) -> bool {
+        let index = self.focused_block;
+        let Some(text) = self.focused_text() else {
+            return false;
+        };
+        let clamped = offset.min(text.len());
+
+        let block = &mut self.blocks[index];
+        let previous_head = block.cursor.head;
+        let previous_anchor = block.cursor.anchor;
+
+        if shift {
+            if block.cursor.anchor.is_none() {
+                block.cursor.anchor = Some(previous_head);
+            }
+            block.cursor.head = clamped;
+            if block.cursor.anchor == Some(block.cursor.head) {
+                block.cursor.anchor = None;
+            }
+        } else {
+            block.cursor.head = clamped;
+            block.cursor.anchor = None;
+        }
+
+        block.cursor.head != previous_head || block.cursor.anchor != previous_anchor
+    }
+
     pub fn set_focused_draft(&mut self, draft: String) -> bool {
         let index = self.focused_block;
         let Some(block) = self.blocks.get_mut(index) else {
@@ -1621,5 +1648,27 @@ Plain paragraph without math."#,
         let document = DocumentModel::from_markdown(r#"Price is \$42 today."#);
 
         assert!(document.blocks()[0].typst.is_none());
+    }
+
+    #[test]
+    fn set_focused_cursor_clamps_to_text_bounds() {
+        let mut document = DocumentModel::from_markdown("Hello");
+
+        assert!(document.set_focused_cursor(999, false));
+        let cursor = document.focused_cursor().unwrap();
+        assert_eq!(cursor.head, 5);
+        assert_eq!(cursor.anchor, None);
+    }
+
+    #[test]
+    fn shift_set_focused_cursor_keeps_selection_anchor() {
+        let mut document = DocumentModel::from_markdown("Hello");
+
+        assert!(document.move_cursor_right(false));
+        assert!(document.set_focused_cursor(4, true));
+
+        let cursor = document.focused_cursor().unwrap();
+        assert_eq!(cursor.head, 4);
+        assert_eq!(cursor.anchor, Some(1));
     }
 }
