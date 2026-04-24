@@ -379,136 +379,63 @@ impl SolaRoot {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let is_focused = self.document.focused_block() == index;
-        let has_draft = is_focused && self.document.focused_has_draft();
-        let border = if is_focused {
-            rgb_hex(&self.theme.palette.focused_border)
-        } else {
-            rgb_hex(&self.theme.palette.panel_border)
-        };
-        let background = if is_focused {
-            rgb_hex(&self.theme.palette.focused_background)
-        } else {
-            rgb_hex(&self.theme.palette.panel_background)
-        };
 
-        let block_status = if has_draft {
-            "draft"
-        } else if is_focused {
-            "focused"
-        } else {
-            "blurred"
-        };
-
-        let mut card = div()
-            .id(("block-card", index))
+        let block_container = div()
+            .id(("block-container", index))
             .flex()
-            .flex_col()
+            .flex_row()
             .gap(px(12.0))
-            .p(px(16.0))
-            .bg(background)
-            .rounded(px(14.0))
-            .border_1()
-            .border_color(border)
+            .p(px(8.0))
             .cursor_pointer()
-            .track_focus(&self.focus_handle)
-            .child(
-                div()
-                    .flex()
-                    .justify_between()
-                    .items_center()
-                    .child(pill(
-                        block.kind.label(),
-                        block_status.to_string(),
-                        &self.theme,
-                    ))
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(rgb_hex(&self.theme.palette.text_muted))
-                            .child(format!("block #{:02}", index + 1)),
-                    ),
-            );
+            .track_focus(&self.focus_handle);
 
-        if is_focused {
-            card = card.on_key_down(cx.listener(|this, event, _window, cx| {
-                if this.handle_focused_key_down(event) {
-                    cx.notify();
-                }
-            }));
+        // Subtle focused indicator (accent color line on the left)
+        let indicator = if is_focused {
+            div()
+                .w(px(2.0))
+                .bg(rgb_hex(&self.theme.palette.accent))
+                .rounded_full()
+        } else {
+            div().w(px(2.0))
+        };
 
-            let append_button = action_button("append draft note".to_string(), &self.theme, true)
-                .id(("append-draft", index))
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    if this
-                        .document
-                        .append_to_focused_draft("\nEdited in the focused source prototype.")
-                    {
+        let content = if is_focused {
+            div()
+                .flex_1()
+                .on_key_down(cx.listener(|this, event, _window, cx| {
+                    if this.handle_focused_key_down(event) {
                         cx.notify();
                     }
-                }));
-
-            let revert_button = action_button("revert draft".to_string(), &self.theme, has_draft)
-                .id(("revert-draft", index))
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    if this.document.revert_focused_draft() {
-                        cx.notify();
-                    }
-                }));
-
-            let apply_button = action_button("apply draft".to_string(), &self.theme, has_draft)
-                .id(("apply-draft", index))
-                .on_click(cx.listener(|this, _event, _window, cx| {
-                    if this.document.apply_focused_draft() {
-                        cx.notify();
-                    }
-                }));
-
-            card = card
+                }))
                 .child(
                     div()
-                        .text_size(px(13.0))
-                        .text_color(rgb_hex(&self.theme.palette.text_muted))
-                        .child("Focused state · editable markdown source draft"),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(10.0))
-                        .items_center()
-                        .child(append_button)
-                        .child(revert_button)
-                        .child(apply_button),
-                )
-                .child(
-                    div()
-                        .p(px(14.0))
+                        .p(px(8.0))
                         .bg(rgb_hex(&self.theme.palette.code_background))
-                        .rounded(px(10.0))
+                        .rounded(px(8.0))
                         .child(self.render_highlighted_text(
                             self.document.focused_text().unwrap_or(&block.source),
                             13.0,
                             self.document.focused_cursor(),
                         )),
                 )
-                .child(
-                    div()
-                        .text_size(px(13.0))
-                        .text_color(rgb_hex(&self.theme.palette.text_muted))
-                        .child("Blurred preview"),
-                )
-                .child(self.render_blurred_content(block));
         } else {
-            card = card.child(self.render_blurred_content(block));
-        }
+            div().flex_1().child(self.render_blurred_content(block))
+        };
 
-        card = card.on_click(cx.listener(move |this, _event, window, cx| {
-            if this.document.focus_block(index) {
-                window.focus(&this.focus_handle);
-                cx.notify();
-            }
-        }));
+        block_container
+            .child(indicator)
+            .child(content)
+            .on_click(cx.listener(move |this, _event, window, cx| {
+                // Auto-apply draft before moving focus
+                if this.document.focused_has_draft() {
+                    this.document.apply_focused_draft();
+                }
 
-        card
+                if this.document.focus_block(index) {
+                    window.focus(&this.focus_handle);
+                    cx.notify();
+                }
+            }))
     }
 
     fn render_blurred_content(&self, block: &DocumentBlock) -> Div {
@@ -880,10 +807,16 @@ impl SolaRoot {
         }
 
         if modifiers.alt && key.eq_ignore_ascii_case("up") {
+            if self.document.focused_has_draft() {
+                self.document.apply_focused_draft();
+            }
             return self.document.focus_previous();
         }
 
         if modifiers.alt && key.eq_ignore_ascii_case("down") {
+            if self.document.focused_has_draft() {
+                self.document.apply_focused_draft();
+            }
             return self.document.focus_next();
         }
 

@@ -201,3 +201,13 @@
     - `cargo check`
     - `cargo test --workspace`
     - `timeout 10s cargo run`
+42. 拆除“脚手架”并实现界面美化与自动保存：
+    - `sola-app` 重写块渲染逻辑：移除卡片边框、背景色、状态标签和操作按钮，实现纯净无缝的文档视图。
+    - 引入极简选中态提示：在 Focused Block 左侧增加一条 Accent Color 竖线。
+    - 实现 `Auto-apply on blur`：在鼠标点击切换块、`Alt+Up/Down` 快捷键导航时，自动触发当前块的草稿保存 (`apply_focused_draft`)。
+    - 统一编辑体验：原地编辑源码，失去焦点即渲染为所见即所得态。
+43. 本轮修改后再次完成强校验：
+    - `cargo fmt --all`
+    - `cargo check`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`
