@@ -4,7 +4,8 @@ use gpui::{
     Window, WindowBounds, WindowOptions, div, px, rgb, size,
 };
 use sola_core::{APP_NAME, APP_TAGLINE, ROADMAP_PHASES, sample_markdown};
-use sola_document::{BlockKind, DocumentBlock, DocumentModel};
+use sola_document::highlighter::{HighlightKind, SyntaxHighlighter};
+use sola_document::{BlockKind, DocumentBlock, DocumentModel, HtmlAdapter, HtmlNode};
 use sola_theme::{Theme, parse_hex_color};
 #[cfg(target_os = "linux")]
 use std::{
@@ -43,6 +44,7 @@ struct SolaRoot {
     theme_mode: ThemeMode,
     theme: Theme,
     document: DocumentModel,
+    highlighter: SyntaxHighlighter,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +60,7 @@ impl SolaRoot {
             theme_mode: ThemeMode::Dark,
             theme: Theme::sola_dark(),
             document: DocumentModel::from_markdown(sample_markdown()),
+            highlighter: SyntaxHighlighter::new_rust(),
         }
     }
 
@@ -481,12 +484,10 @@ impl SolaRoot {
                         .p(px(14.0))
                         .bg(rgb_hex(&self.theme.palette.code_background))
                         .rounded(px(10.0))
-                        .child(
-                            self.document
-                                .focused_text()
-                                .unwrap_or(&block.source)
-                                .to_string(),
-                        ),
+                        .child(self.render_highlighted_text(
+                            self.document.focused_text().unwrap_or(&block.source),
+                            13.0,
+                        )),
                 )
                 .child(
                     div()
@@ -532,10 +533,11 @@ impl SolaRoot {
                         .font_weight(FontWeight::BOLD)
                         .child(block.rendered.clone()),
                 ),
-            BlockKind::Paragraph => div()
-                .text_size(px(self.theme.typography.body_size as f32))
-                .text_color(rgb_hex(&self.theme.palette.text_primary))
-                .child(block.rendered.clone()),
+            BlockKind::Paragraph => self.render_textual_block(
+                block,
+                self.theme.typography.body_size as f32,
+                &self.theme.palette.text_primary,
+            ),
             BlockKind::ListItem { ordered } => div()
                 .flex()
                 .gap(px(10.0))
@@ -545,17 +547,20 @@ impl SolaRoot {
                         .font_weight(FontWeight::BOLD)
                         .child(if *ordered { "1." } else { "•" }),
                 )
-                .child(
-                    div()
-                        .text_color(rgb_hex(&self.theme.palette.text_primary))
-                        .child(block.rendered.clone()),
-                ),
+                .child(self.render_textual_block(
+                    block,
+                    self.theme.typography.body_size as f32,
+                    &self.theme.palette.text_primary,
+                )),
             BlockKind::Quote => div()
                 .pl(px(14.0))
                 .border_l_2()
                 .border_color(rgb_hex(&self.theme.palette.accent))
-                .text_color(rgb_hex(&self.theme.palette.text_muted))
-                .child(block.rendered.clone()),
+                .child(self.render_textual_block(
+                    block,
+                    self.theme.typography.body_size as f32,
+                    &self.theme.palette.text_muted,
+                )),
             BlockKind::CodeFence { language } => div()
                 .flex()
                 .flex_col()
@@ -577,9 +582,153 @@ impl SolaRoot {
                         .p(px(14.0))
                         .bg(rgb_hex(&self.theme.palette.code_background))
                         .rounded(px(10.0))
-                        .child(block.rendered.clone()),
+                        .child(self.render_highlighted_text(&block.rendered, 13.0)),
                 ),
         }
+    }
+
+    fn render_textual_block(&self, block: &DocumentBlock, default_size: f32, color: &str) -> Div {
+        match &block.html {
+            Some(HtmlAdapter::Adapted { nodes }) => {
+                self.render_html_nodes(nodes, default_size, color)
+            }
+            Some(HtmlAdapter::Unsupported { raw }) => div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(pill(
+                    "html adapter",
+                    "degraded unsupported html".to_string(),
+                    &self.theme,
+                ))
+                .child(
+                    div()
+                        .p(px(14.0))
+                        .bg(rgb_hex(&self.theme.palette.code_background))
+                        .rounded(px(10.0))
+                        .text_size(px(13.0))
+                        .text_color(rgb_hex(&self.theme.palette.text_muted))
+                        .child(raw.clone()),
+                ),
+            None => div()
+                .text_size(px(default_size))
+                .text_color(rgb_hex(color))
+                .child(block.rendered.clone()),
+        }
+    }
+
+    fn render_html_nodes(&self, nodes: &[HtmlNode], default_size: f32, default_color: &str) -> Div {
+        nodes.iter().fold(
+            div().flex().flex_wrap().items_center().gap(px(6.0)),
+            |content, node| match node {
+                HtmlNode::Text(text) => content.child(
+                    div()
+                        .text_size(px(default_size))
+                        .text_color(rgb_hex(default_color))
+                        .child(text.clone()),
+                ),
+                HtmlNode::StyledText(styled) => {
+                    let color = styled
+                        .color
+                        .as_deref()
+                        .filter(|value| parse_hex_color(value).is_some())
+                        .unwrap_or(default_color);
+                    let size = styled
+                        .font_size_px
+                        .map(|size| size as f32)
+                        .unwrap_or(default_size);
+
+                    content.child(
+                        div()
+                            .text_size(px(size))
+                            .text_color(rgb_hex(color))
+                            .child(styled.text.clone()),
+                    )
+                }
+                HtmlNode::Image(image) => content.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .px(px(12.0))
+                        .py(px(10.0))
+                        .bg(rgb_hex(&self.theme.palette.code_background))
+                        .rounded(px(10.0))
+                        .border_1()
+                        .border_color(rgb_hex(&self.theme.palette.panel_border))
+                        .child(
+                            div()
+                                .text_size(px(12.0))
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(rgb_hex(&self.theme.palette.accent))
+                                .child("IMG"),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(4.0))
+                                .child(
+                                    div()
+                                        .text_size(px(13.0))
+                                        .text_color(rgb_hex(&self.theme.palette.text_primary))
+                                        .child(
+                                            image
+                                                .alt
+                                                .clone()
+                                                .or_else(|| image.src.clone())
+                                                .unwrap_or_else(|| "inline image".to_string()),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .text_color(rgb_hex(&self.theme.palette.text_muted))
+                                        .child(format!(
+                                            "{}{}",
+                                            image
+                                                .width_px
+                                                .map(|width| format!("width {}px", width))
+                                                .unwrap_or_else(|| "width auto".to_string()),
+                                            image
+                                                .src
+                                                .as_ref()
+                                                .map(|src| format!(" · {}", src))
+                                                .unwrap_or_default()
+                                        )),
+                                ),
+                        ),
+                ),
+            },
+        )
+    }
+
+    fn render_highlighted_text(&self, text: &str, default_size: f32) -> Div {
+        let spans = self.highlighter.highlight(text);
+        let syntax = &self.theme.syntax;
+
+        spans.iter().fold(
+            div().flex().flex_wrap().items_center().gap(px(0.0)),
+            |content, span| {
+                let color = match span.kind {
+                    HighlightKind::Keyword => &syntax.keyword,
+                    HighlightKind::String => &syntax.string,
+                    HighlightKind::Comment => &syntax.comment,
+                    HighlightKind::Function => &syntax.function,
+                    HighlightKind::Number => &syntax.number,
+                    HighlightKind::Constant => &syntax.constant,
+                    HighlightKind::TypeName => &syntax.type_name,
+                    HighlightKind::Other => &self.theme.palette.text_primary,
+                };
+
+                content.child(
+                    div()
+                        .text_size(px(default_size))
+                        .text_color(rgb_hex(color))
+                        .child(span.text.clone()),
+                )
+            },
+        )
     }
 }
 

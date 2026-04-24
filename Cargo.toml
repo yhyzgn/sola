@@ -18,6 +18,8 @@ gpui = "0.2.2"
 pulldown-cmark = "0.13.0"
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
+tree-sitter = "0.25"
+tree-sitter-rust = "0.23"
 
 [package]
 name = "sola"

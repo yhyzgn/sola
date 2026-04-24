@@ -8,3 +8,5 @@ path = "src/lib.rs"
 
 [dependencies]
 pulldown-cmark.workspace = true
+tree-sitter.workspace = true
+tree-sitter-rust.workspace = true

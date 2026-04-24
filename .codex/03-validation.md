@@ -184,3 +184,60 @@ timeout 10s cargo run
 已知验证缺口：
 
 - 当前容器环境没有可用桌面显示后端，无法在本轮内完成真实窗口中的手工点击 / 键盘 / 滚轮交互验证。
+
+## 增量验证（HTML adapter 原型）
+
+本轮新增：
+
+- `sola-document` 白名单式 HTML adapter 提取
+- 安全 `<span style="color / font-size">` 与 `<img width>` 元数据建模
+- unsupported HTML 的显式降级标记
+- `sola-app` 中的 adapted HTML prototype 预览
+
+重新执行：
+
+```bash
+cargo fmt --all
+cargo check
+cargo test --workspace
+timeout 10s cargo run
+```
+
+结果：全部通过。
+
+新增通过的测试：
+
+- `sola-document`
+  - `html_adapter_extracts_safe_span_and_image_metadata`
+  - `unsupported_html_is_marked_for_degraded_preview`
+
+已知验证缺口：
+
+- 当前容器环境没有可用桌面显示后端，无法在本轮内完成真实窗口中的 HTML adapter 手工视觉验证。
+
+## 增量验证（Tree-sitter 语法高亮）
+
+本轮新增：
+
+- `tree-sitter` 与 `tree-sitter-rust` 集成
+- `sola-theme` 语法配色支持
+- `sola-document` 增量高亮解析
+- `sola-app` 源码高亮渲染
+
+重新执行：
+
+```bash
+cargo fmt --all
+cargo check
+cargo test --workspace
+timeout 10s cargo run
+```
+
+结果：全部通过。
+
+新增通过的测试：
+
+- `sola-document`
+  - `highlighter::tests::rust_highlighter_extracts_keywords_and_strings`
+- `sola-theme`
+  - `tests::theme_can_be_loaded_from_toml` (扩展了对 syntax section 的校验)

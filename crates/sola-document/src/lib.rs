@@ -1,5 +1,7 @@
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
+pub mod highlighter;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockKind {
     Heading { level: u8 },
@@ -10,11 +12,39 @@ pub enum BlockKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HtmlNode {
+    Text(String),
+    StyledText(HtmlStyledText),
+    Image(HtmlImage),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HtmlStyledText {
+    pub text: String,
+    pub color: Option<String>,
+    pub font_size_px: Option<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HtmlImage {
+    pub src: Option<String>,
+    pub alt: Option<String>,
+    pub width_px: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HtmlAdapter {
+    Adapted { nodes: Vec<HtmlNode> },
+    Unsupported { raw: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentBlock {
     pub id: usize,
     pub kind: BlockKind,
     pub source: String,
     pub rendered: String,
+    pub html: Option<HtmlAdapter>,
     pub draft: Option<String>,
 }
 
@@ -267,16 +297,8 @@ impl DocumentModel {
         };
 
         self.push_undo_snapshot();
-        self.blocks.insert(
-            insert_at,
-            DocumentBlock {
-                id: insert_at,
-                kind: BlockKind::Paragraph,
-                source: text.clone(),
-                rendered: text,
-                draft: None,
-            },
-        );
+        self.blocks
+            .insert(insert_at, new_block(insert_at, BlockKind::Paragraph, text));
         self.focused_block = insert_at;
         self.rebuild_metadata();
         true
@@ -289,16 +311,8 @@ impl DocumentModel {
 
         let insert_at = self.focused_block + 1;
         self.push_undo_snapshot();
-        self.blocks.insert(
-            insert_at,
-            DocumentBlock {
-                id: insert_at,
-                kind: block.kind,
-                source: block.source,
-                rendered: block.rendered,
-                draft: None,
-            },
-        );
+        self.blocks
+            .insert(insert_at, new_block(insert_at, block.kind, block.source));
         self.focused_block = insert_at;
         self.rebuild_metadata();
         true
@@ -349,13 +363,7 @@ fn parse_blocks(source: &str) -> Vec<DocumentBlock> {
         }
 
         let id = blocks.len();
-        blocks.push(DocumentBlock {
-            id,
-            kind: BlockKind::Paragraph,
-            rendered: content.clone(),
-            source: content,
-            draft: None,
-        });
+        blocks.push(new_block(id, BlockKind::Paragraph, content));
         paragraph_lines.clear();
     };
 
@@ -366,15 +374,13 @@ fn parse_blocks(source: &str) -> Vec<DocumentBlock> {
             if line.trim_start().starts_with("```") {
                 let id = blocks.len();
                 let code = code_lines.join("\n");
-                blocks.push(DocumentBlock {
+                blocks.push(new_block(
                     id,
-                    kind: BlockKind::CodeFence {
+                    BlockKind::CodeFence {
                         language: code_language.take(),
                     },
-                    rendered: code.clone(),
-                    source: format!("```\n{}\n```", code),
-                    draft: None,
-                });
+                    format!("```\n{}\n```", code),
+                ));
                 code_lines.clear();
                 continue;
             }
@@ -399,52 +405,44 @@ fn parse_blocks(source: &str) -> Vec<DocumentBlock> {
         if let Some((level, text)) = parse_heading(line) {
             flush_paragraph(&mut blocks, &mut paragraph_lines);
             let id = blocks.len();
-            blocks.push(DocumentBlock {
+            let _ = text;
+            blocks.push(new_block(
                 id,
-                kind: BlockKind::Heading { level },
-                rendered: text.clone(),
-                source: line.to_string(),
-                draft: None,
-            });
+                BlockKind::Heading { level },
+                line.to_string(),
+            ));
             continue;
         }
 
         if let Some(text) = line.trim_start().strip_prefix("> ") {
             flush_paragraph(&mut blocks, &mut paragraph_lines);
             let id = blocks.len();
-            blocks.push(DocumentBlock {
-                id,
-                kind: BlockKind::Quote,
-                rendered: text.to_string(),
-                source: line.to_string(),
-                draft: None,
-            });
+            let _ = text;
+            blocks.push(new_block(id, BlockKind::Quote, line.to_string()));
             continue;
         }
 
         if let Some(text) = parse_unordered_list_item(line) {
             flush_paragraph(&mut blocks, &mut paragraph_lines);
             let id = blocks.len();
-            blocks.push(DocumentBlock {
+            let _ = text;
+            blocks.push(new_block(
                 id,
-                kind: BlockKind::ListItem { ordered: false },
-                rendered: text.to_string(),
-                source: line.to_string(),
-                draft: None,
-            });
+                BlockKind::ListItem { ordered: false },
+                line.to_string(),
+            ));
             continue;
         }
 
         if let Some(text) = parse_ordered_list_item(line) {
             flush_paragraph(&mut blocks, &mut paragraph_lines);
             let id = blocks.len();
-            blocks.push(DocumentBlock {
+            let _ = text;
+            blocks.push(new_block(
                 id,
-                kind: BlockKind::ListItem { ordered: true },
-                rendered: text.to_string(),
-                source: line.to_string(),
-                draft: None,
-            });
+                BlockKind::ListItem { ordered: true },
+                line.to_string(),
+            ));
             continue;
         }
 
@@ -454,15 +452,13 @@ fn parse_blocks(source: &str) -> Vec<DocumentBlock> {
     if code_language.is_some() {
         let id = blocks.len();
         let code = code_lines.join("\n");
-        blocks.push(DocumentBlock {
+        blocks.push(new_block(
             id,
-            kind: BlockKind::CodeFence {
+            BlockKind::CodeFence {
                 language: code_language.take(),
             },
-            rendered: code.clone(),
-            source: format!("```\n{}\n```", code),
-            draft: None,
-        });
+            format!("```\n{}\n```", code),
+        ));
     }
 
     flush_paragraph(&mut blocks, &mut paragraph_lines);
@@ -525,28 +521,44 @@ fn serialize_blocks(blocks: &[DocumentBlock]) -> String {
         .join("\n\n")
 }
 
+fn new_block(id: usize, kind: BlockKind, source: impl Into<String>) -> DocumentBlock {
+    let source = source.into();
+    let rendered = render_block_source(&kind, &source);
+    let html = adapt_block_html(&kind, &source);
+
+    DocumentBlock {
+        id,
+        kind,
+        source,
+        rendered,
+        html,
+        draft: None,
+    }
+}
+
 fn render_block_source(kind: &BlockKind, source: &str) -> String {
     match kind {
         BlockKind::Heading { .. } => parse_heading(source)
             .map(|(_, text)| text)
             .unwrap_or_else(|| source.trim().to_string()),
-        BlockKind::Paragraph => source.trim().to_string(),
+        BlockKind::Paragraph => render_paragraph_like_source(source),
         BlockKind::ListItem { ordered } => {
             if *ordered {
-                parse_ordered_list_item(source)
-                    .unwrap_or(source.trim())
-                    .to_string()
+                render_paragraph_like_source(
+                    parse_ordered_list_item(source).unwrap_or(source.trim()),
+                )
             } else {
-                parse_unordered_list_item(source)
-                    .unwrap_or(source.trim())
-                    .to_string()
+                render_paragraph_like_source(
+                    parse_unordered_list_item(source).unwrap_or(source.trim()),
+                )
             }
         }
-        BlockKind::Quote => source
-            .trim_start()
-            .strip_prefix("> ")
-            .unwrap_or(source.trim())
-            .to_string(),
+        BlockKind::Quote => render_paragraph_like_source(
+            source
+                .trim_start()
+                .strip_prefix("> ")
+                .unwrap_or(source.trim()),
+        ),
         BlockKind::CodeFence { .. } => source
             .lines()
             .skip(1)
@@ -554,6 +566,252 @@ fn render_block_source(kind: &BlockKind, source: &str) -> String {
             .collect::<Vec<_>>()
             .join("\n"),
     }
+}
+
+fn render_paragraph_like_source(source: &str) -> String {
+    match adapt_html(source) {
+        Some(HtmlAdapter::Adapted { ref nodes }) => summarize_html_nodes(nodes),
+        _ => source.trim().to_string(),
+    }
+}
+
+fn adapt_block_html(kind: &BlockKind, source: &str) -> Option<HtmlAdapter> {
+    match kind {
+        BlockKind::Paragraph | BlockKind::ListItem { .. } | BlockKind::Quote => adapt_html(source),
+        BlockKind::Heading { .. } | BlockKind::CodeFence { .. } => None,
+    }
+}
+
+fn adapt_html(source: &str) -> Option<HtmlAdapter> {
+    if !source.contains('<') || !source.contains('>') {
+        return None;
+    }
+
+    let mut remaining = source.trim();
+    let mut nodes = Vec::new();
+    let mut saw_html = false;
+
+    while let Some(start) = remaining.find('<') {
+        let before = &remaining[..start];
+        if !before.is_empty() {
+            nodes.push(HtmlNode::Text(before.to_string()));
+        }
+
+        let tag_start = &remaining[start..];
+        if tag_start.starts_with("<img") {
+            let Some(tag_end) = tag_start.find('>') else {
+                return Some(HtmlAdapter::Unsupported {
+                    raw: source.trim().to_string(),
+                });
+            };
+
+            let tag = &tag_start[..=tag_end];
+            let Some(image) = parse_img_tag(tag) else {
+                return Some(HtmlAdapter::Unsupported {
+                    raw: source.trim().to_string(),
+                });
+            };
+
+            nodes.push(HtmlNode::Image(image));
+            remaining = &tag_start[tag_end + 1..];
+            saw_html = true;
+            continue;
+        }
+
+        if tag_start.starts_with("<span") {
+            let Some(open_end) = tag_start.find('>') else {
+                return Some(HtmlAdapter::Unsupported {
+                    raw: source.trim().to_string(),
+                });
+            };
+
+            let open_tag = &tag_start[..=open_end];
+            let after_open = &tag_start[open_end + 1..];
+            let Some(close_start) = after_open.find("</span>") else {
+                return Some(HtmlAdapter::Unsupported {
+                    raw: source.trim().to_string(),
+                });
+            };
+
+            let inner = &after_open[..close_start];
+            if inner.contains('<') {
+                return Some(HtmlAdapter::Unsupported {
+                    raw: source.trim().to_string(),
+                });
+            }
+
+            let (color, font_size_px) = parse_span_style(open_tag);
+            nodes.push(HtmlNode::StyledText(HtmlStyledText {
+                text: inner.to_string(),
+                color,
+                font_size_px,
+            }));
+            remaining = &after_open[close_start + "</span>".len()..];
+            saw_html = true;
+            continue;
+        }
+
+        return Some(HtmlAdapter::Unsupported {
+            raw: source.trim().to_string(),
+        });
+    }
+
+    if !remaining.is_empty() {
+        nodes.push(HtmlNode::Text(remaining.to_string()));
+    }
+
+    saw_html.then_some(HtmlAdapter::Adapted { nodes })
+}
+
+fn summarize_html_nodes(nodes: &[HtmlNode]) -> String {
+    nodes
+        .iter()
+        .map(|node| match node {
+            HtmlNode::Text(text) => text.clone(),
+            HtmlNode::StyledText(text) => text.text.clone(),
+            HtmlNode::Image(image) => image
+                .alt
+                .clone()
+                .or_else(|| image.src.clone())
+                .map(|label| format!("[image: {label}]"))
+                .unwrap_or_else(|| "[image]".to_string()),
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn parse_img_tag(tag: &str) -> Option<HtmlImage> {
+    let attrs = parse_tag_attributes(tag);
+    if attrs.is_empty() {
+        return None;
+    }
+
+    let width_px = attrs
+        .get("width")
+        .and_then(|value| parse_px_u32(value).or_else(|| value.parse::<u32>().ok()));
+
+    Some(HtmlImage {
+        src: attrs.get("src").cloned(),
+        alt: attrs.get("alt").cloned(),
+        width_px,
+    })
+}
+
+fn parse_span_style(tag: &str) -> (Option<String>, Option<u16>) {
+    let attrs = parse_tag_attributes(tag);
+    let Some(style) = attrs.get("style") else {
+        return (None, None);
+    };
+
+    let mut color = None;
+    let mut font_size_px = None;
+
+    for declaration in style.split(';') {
+        let Some((key, value)) = declaration.split_once(':') else {
+            continue;
+        };
+
+        let key = key.trim().to_ascii_lowercase();
+        let value = value.trim();
+
+        match key.as_str() {
+            "color" if !value.is_empty() => color = Some(value.to_string()),
+            "font-size" => {
+                font_size_px = parse_px_u16(value);
+            }
+            _ => {}
+        }
+    }
+
+    (color, font_size_px)
+}
+
+fn parse_tag_attributes(tag: &str) -> std::collections::BTreeMap<String, String> {
+    let mut attrs = std::collections::BTreeMap::new();
+    let mut inner = tag
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .trim_end_matches('/')
+        .trim();
+
+    let Some(first_space) = inner.find(char::is_whitespace) else {
+        return attrs;
+    };
+    inner = inner[first_space..].trim();
+
+    let bytes = inner.as_bytes();
+    let mut index = 0;
+
+    while index < bytes.len() {
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() {
+            break;
+        }
+
+        let key_start = index;
+        while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'=' {
+            index += 1;
+        }
+        let key = inner[key_start..index].trim().to_ascii_lowercase();
+
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() || bytes[index] != b'=' {
+            while index < bytes.len() && !bytes[index].is_ascii_whitespace() {
+                index += 1;
+            }
+            continue;
+        }
+
+        index += 1;
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() {
+            break;
+        }
+
+        let value = if bytes[index] == b'"' || bytes[index] == b'\'' {
+            let quote = bytes[index];
+            index += 1;
+            let value_start = index;
+            while index < bytes.len() && bytes[index] != quote {
+                index += 1;
+            }
+            let value = inner[value_start..index].to_string();
+            if index < bytes.len() {
+                index += 1;
+            }
+            value
+        } else {
+            let value_start = index;
+            while index < bytes.len() && !bytes[index].is_ascii_whitespace() {
+                index += 1;
+            }
+            inner[value_start..index].to_string()
+        };
+
+        if !key.is_empty() {
+            attrs.insert(key, value);
+        }
+    }
+
+    attrs
+}
+
+fn parse_px_u16(value: &str) -> Option<u16> {
+    parse_px_u32(value).and_then(|value| value.try_into().ok())
+}
+
+fn parse_px_u32(value: &str) -> Option<u32> {
+    let value = value.trim();
+    let digits = value.strip_suffix("px").unwrap_or(value).trim();
+    digits.parse::<u32>().ok()
 }
 
 fn parse_heading(line: &str) -> Option<(u8, String)> {
@@ -627,6 +885,8 @@ impl DocumentModel {
     fn rebuild_metadata(&mut self) {
         for (index, block) in self.blocks.iter_mut().enumerate() {
             block.id = index;
+            block.rendered = render_block_source(&block.kind, &block.source);
+            block.html = adapt_block_html(&block.kind, &block.source);
         }
         self.source = serialize_blocks(&self.blocks);
         self.outline = build_outline(&self.source);
@@ -821,5 +1081,53 @@ fn main() {}
         assert!(document.push_char_to_focused_draft('?'));
         assert!(!document.can_redo());
         assert_eq!(document.focused_text(), Some("Paragraph?"));
+    }
+
+    #[test]
+    fn html_adapter_extracts_safe_span_and_image_metadata() {
+        let document = DocumentModel::from_markdown(
+            "Intro <span style=\"color: #ff6600; font-size: 18px\">warm text</span> tail <img src=\"diagram.png\" alt=\"Diagram\" width=\"320\" />",
+        );
+
+        let Some(HtmlAdapter::Adapted { nodes }) = &document.blocks()[0].html else {
+            panic!("expected adapted html metadata");
+        };
+
+        assert_eq!(
+            document.blocks()[0].rendered,
+            "Intro warm text tail [image: Diagram]"
+        );
+        assert!(matches!(&nodes[0], HtmlNode::Text(text) if text == "Intro "));
+        assert!(matches!(
+            &nodes[1],
+            HtmlNode::StyledText(HtmlStyledText {
+                text,
+                color: Some(color),
+                font_size_px: Some(18),
+            }) if text == "warm text" && color == "#ff6600"
+        ));
+        assert!(matches!(
+            &nodes[3],
+            HtmlNode::Image(HtmlImage {
+                src: Some(src),
+                alt: Some(alt),
+                width_px: Some(320),
+            }) if src == "diagram.png" && alt == "Diagram"
+        ));
+    }
+
+    #[test]
+    fn unsupported_html_is_marked_for_degraded_preview() {
+        let document = DocumentModel::from_markdown("<table><tr><td>cell</td></tr></table>");
+
+        let Some(HtmlAdapter::Unsupported { raw }) = &document.blocks()[0].html else {
+            panic!("expected unsupported html marker");
+        };
+
+        assert_eq!(raw, "<table><tr><td>cell</td></tr></table>");
+        assert_eq!(
+            document.blocks()[0].rendered,
+            "<table><tr><td>cell</td></tr></table>"
+        );
     }
 }

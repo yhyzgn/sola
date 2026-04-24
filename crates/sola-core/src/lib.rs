@@ -33,5 +33,13 @@ fn focused_block() -> &'static str {
 1. Tree-sitter highlighting
 2. Typst-powered formula rendering
 3. Offline export pipeline
+
+## HTML adapter sketch
+
+Inline safe HTML keeps structure instead of forcing a webview:
+<span style="color: #ff7a59; font-size: 18px">warm inline emphasis</span> remains stylable.
+
+Whitelisted images surface layout metadata for native rendering:
+<img src="architecture-sketch.png" alt="Architecture sketch" width="320" />
 "#
 }

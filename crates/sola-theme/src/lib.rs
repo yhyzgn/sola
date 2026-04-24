@@ -5,6 +5,7 @@ pub struct Theme {
     pub name: String,
     pub palette: ThemePalette,
     pub typography: ThemeTypography,
+    pub syntax: SyntaxTheme,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,6 +19,17 @@ pub struct ThemePalette {
     pub focused_background: String,
     pub focused_border: String,
     pub code_background: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyntaxTheme {
+    pub keyword: String,
+    pub string: String,
+    pub comment: String,
+    pub function: String,
+    pub number: String,
+    pub constant: String,
+    pub type_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,6 +61,15 @@ impl Theme {
                 title_size: 24,
                 code_size: 14,
             },
+            syntax: SyntaxTheme {
+                keyword: "#c678dd".into(),
+                string: "#98c379".into(),
+                comment: "#5c6370".into(),
+                function: "#61afef".into(),
+                number: "#d19a66".into(),
+                constant: "#e06c75".into(),
+                type_name: "#e5c07b".into(),
+            },
         }
     }
 
@@ -71,6 +92,15 @@ impl Theme {
                 body_size: 15,
                 title_size: 24,
                 code_size: 14,
+            },
+            syntax: SyntaxTheme {
+                keyword: "#a626a4".into(),
+                string: "#50a14f".into(),
+                comment: "#a0a1a7".into(),
+                function: "#4078f2".into(),
+                number: "#986801".into(),
+                constant: "#e45649".into(),
+                type_name: "#c18401".into(),
             },
         }
     }
@@ -125,12 +155,22 @@ ui_scale = 100
 body_size = 15
 title_size = 24
 code_size = 14
+
+[syntax]
+keyword = "#c678dd"
+string = "#98c379"
+comment = "#5c6370"
+function = "#61afef"
+number = "#d19a66"
+constant = "#e06c75"
+type_name = "#e5c07b"
 "##,
         )
         .expect("theme should parse from TOML");
 
         assert_eq!(theme.name, "custom");
         assert_eq!(parse_hex_color(&theme.palette.accent), Some(0x7c3aed));
+        assert_eq!(parse_hex_color(&theme.syntax.keyword), Some(0xc678dd));
     }
 
     #[test]

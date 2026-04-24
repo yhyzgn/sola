@@ -159,3 +159,32 @@
     - `cargo check`
     - `cargo test --workspace`
     - `timeout 10s cargo run`
+34. 继续推进 Phase 2 的 HTML adapter 原型：
+    - `sola-document` 新增白名单式 HTML adapter 数据模型：`HtmlAdapter` / `HtmlNode` / `HtmlStyledText` / `HtmlImage`
+    - 支持提取 `<span style=\"color / font-size\">` 的安全样式
+    - 支持提取 `<img>` 的 `src` / `alt` / `width`
+    - 遇到不在白名单内或嵌套复杂的 HTML 时标记为 `Unsupported`，供 UI 降级显示
+    - paragraph / list / quote 的 `rendered` 摘要改为优先使用 adapter 提炼后的文本
+35. 为原型 UI 接入 HTML adapter 预览：
+    - 样例文档新增 inline span 与 image adapter 示例
+    - `sola-app` 对 adapted HTML 渲染原生预览节点
+    - styled span 按颜色与字号做视觉映射
+    - image 以原生占位卡片展示 alt / src / width 元数据
+    - unsupported HTML 以降级提示 + 源码预览展示
+36. 本轮修改后再次完成强校验：
+    - `cargo fmt --all`
+    - `cargo check`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`
+37. 推进 Phase 3 的 Tree-sitter 语法高亮集成：
+    - 引入 `tree-sitter` 与 `tree-sitter-rust` 依赖。
+    - `sola-theme` 扩展 `SyntaxTheme` 模型，支持从 TOML 加载语法配色。
+    - `sola-document` 新增 `SyntaxHighlighter`，封装 `tree-sitter::Parser` 并使用 `RefCell` 适配 UI 借用。
+    - `sola-app` 接入 `render_highlighted_text` 逻辑，在 focused block 与 CodeFence 中呈现高亮源码。
+    - 修复了 `tree-sitter` v0.25 下 `StreamingIterator` 的适配问题。
+    - 修复了 Rust 查询中关键字列表的兼容性问题。
+38. 本轮修改后再次完成强校验：
+    - `cargo fmt --all`
+    - `cargo check`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`
