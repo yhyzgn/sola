@@ -1,11 +1,11 @@
 [package]
 name = "sola-typst"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 typst = "0.13.0"
 typst-svg = "0.13.0"
 typst-assets = "0.13.0"
-serde = { version = "1.0", features = ["derive"] }
+serde.workspace = true
 thiserror = "1.0"
