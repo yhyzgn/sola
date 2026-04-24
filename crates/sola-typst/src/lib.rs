@@ -1,3 +1,4 @@
+use std::sync::OnceLock;
 use thiserror::Error;
 use typst::diag::{FileError, FileResult};
 use typst::foundations::{Bytes, Datetime};
@@ -21,26 +22,41 @@ pub enum RenderKind {
     Block,
 }
 
+static LIBRARY: OnceLock<LazyHash<Library>> = OnceLock::new();
+static FONTS: OnceLock<Vec<Font>> = OnceLock::new();
+static BOOK: OnceLock<LazyHash<FontBook>> = OnceLock::new();
+
+fn get_library() -> &'static LazyHash<Library> {
+    LIBRARY.get_or_init(|| LazyHash::new(Library::builder().build()))
+}
+
+fn get_fonts() -> &'static Vec<Font> {
+    FONTS.get_or_init(|| {
+        typst_assets::fonts()
+            .filter_map(|data| Font::new(Bytes::new(data.to_vec()), 0))
+            .collect()
+    })
+}
+
+fn get_book() -> &'static LazyHash<FontBook> {
+    BOOK.get_or_init(|| LazyHash::new(FontBook::from_fonts(get_fonts())))
+}
+
 struct SolaWorld {
-    library: LazyHash<Library>,
-    book: LazyHash<FontBook>,
-    fonts: Vec<Font>,
+    library: &'static LazyHash<Library>,
+    book: &'static LazyHash<FontBook>,
+    fonts: &'static Vec<Font>,
     source: Source,
 }
 
 impl SolaWorld {
     fn new(text: &str) -> Self {
-        let library = LazyHash::new(Library::builder().build());
-        let fonts: Vec<Font> = typst_assets::fonts()
-            .map(|data| Font::new(Bytes::new(data.to_vec()), 0).unwrap())
-            .collect();
-        let book = LazyHash::new(FontBook::from_fonts(&fonts));
         let source = Source::detached(text);
 
         Self {
-            library,
-            book,
-            fonts,
+            library: get_library(),
+            book: get_book(),
+            fonts: get_fonts(),
             source,
         }
     }
@@ -48,10 +64,10 @@ impl SolaWorld {
 
 impl World for SolaWorld {
     fn library(&self) -> &LazyHash<Library> {
-        &self.library
+        self.library
     }
     fn book(&self) -> &LazyHash<FontBook> {
-        &self.book
+        self.book
     }
     fn main(&self) -> FileId {
         self.source.id()
@@ -78,13 +94,23 @@ pub fn compile_to_svg(source: &str, kind: RenderKind) -> Result<String, TypstErr
             "#set page(width: auto, height: auto, margin: 0pt)\n${}$",
             source
         ),
-        RenderKind::Block => source.to_string(),
+        RenderKind::Block => format!(
+            "#set page(width: auto, height: auto, margin: 0pt)\n{}",
+            source
+        ),
     };
 
     let world = SolaWorld::new(&full_source);
     let document: PagedDocument = typst::compile(&world)
         .output
-        .map_err(|err| TypstError::Compile(format!("{:?}", err)))?;
+        .map_err(|errs| {
+            TypstError::Compile(
+                errs.into_iter()
+                    .map(|e| e.message.clone())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            )
+        })?;
 
     let svg = typst_svg::svg(&document.pages[0]);
     Ok(svg)
