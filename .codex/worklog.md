@@ -256,3 +256,12 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+53. 完成 Typst 状态保留优化：
+    - `sola-document::rebuild_metadata` 现在会在 block 仍然是 Typst/inline-math 且源码未变时保留已有 `TypstAdapter::{Rendered, Error}`。
+    - `apply_focused_draft` 在源码变更路径上会显式重建目标 block 的 `TypstAdapter`，确保真正改过的内容仍然重新编译。
+    - 为“保留 Rendered 状态”和“保留 Error 状态”分别增加了 TDD 回归测试。
+54. Typst 状态保留阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-document`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）

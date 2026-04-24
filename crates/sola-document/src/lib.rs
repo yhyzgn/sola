@@ -477,6 +477,7 @@ impl DocumentModel {
         block.draft = None;
         block.source = draft;
         block.rendered = render_block_source(&block.kind, &block.source);
+        block.typst = typst_adapter_for_block(&block.kind, &block.rendered);
 
         self.rebuild_metadata();
         true
@@ -1240,7 +1241,8 @@ impl DocumentModel {
             block.id = index;
             block.rendered = render_block_source(&block.kind, &block.source);
             block.html = adapt_block_html(&block.kind, &block.source);
-            block.typst = typst_adapter_for_block(&block.kind, &block.rendered);
+            let next_typst = typst_adapter_for_block(&block.kind, &block.rendered);
+            block.typst = preserve_typst_adapter(block.typst.take(), next_typst);
 
             // Bounds check for cursor
             let text = block.draft.as_deref().unwrap_or(&block.source);
@@ -1257,6 +1259,16 @@ impl DocumentModel {
         self.source = serialize_blocks(&self.blocks);
         self.outline = build_outline(&self.source);
         self.stats = build_stats(&self.blocks);
+    }
+}
+
+fn preserve_typst_adapter(
+    previous: Option<TypstAdapter>,
+    next: Option<TypstAdapter>,
+) -> Option<TypstAdapter> {
+    match (previous, next) {
+        (Some(previous), Some(TypstAdapter::Pending)) => Some(previous),
+        (_, next) => next,
     }
 }
 
@@ -1641,6 +1653,34 @@ Plain paragraph without math."#,
             Some(TypstAdapter::Pending)
         ));
         assert!(document.blocks()[1].typst.is_none());
+    }
+
+    #[test]
+    fn rebuild_metadata_preserves_rendered_typst_state_when_source_is_unchanged() {
+        let mut document = DocumentModel::from_markdown("$$a + b$$");
+        document.focused_block_mut().unwrap().typst = Some(TypstAdapter::Rendered {
+            svg: "<svg>stable</svg>".to_string(),
+        });
+
+        assert!(document.insert_paragraph_after_focused("tail paragraph"));
+        assert!(matches!(
+            document.blocks()[0].typst,
+            Some(TypstAdapter::Rendered { ref svg }) if svg == "<svg>stable</svg>"
+        ));
+    }
+
+    #[test]
+    fn rebuild_metadata_preserves_error_typst_state_when_source_is_unchanged() {
+        let mut document = DocumentModel::from_markdown("Paragraph with $a + b$ inline math.");
+        document.focused_block_mut().unwrap().typst = Some(TypstAdapter::Error {
+            message: "bad typst".to_string(),
+        });
+
+        assert!(document.insert_paragraph_after_focused("tail paragraph"));
+        assert!(matches!(
+            document.blocks()[0].typst,
+            Some(TypstAdapter::Error { ref message }) if message == "bad typst"
+        ));
     }
 
     #[test]

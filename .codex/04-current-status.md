@@ -18,7 +18,7 @@
 ## 剩余技术债/风险 (Risks & Tech Debt)
 - **垂直移动逻辑**：目前尚未实现上下方向键跨行移动光标，这需要对 `Flex-wrap` 排版下的字符坐标有精确测量。
 - **Tree-sitter 关键字**：在 Rust 查询中，`mut` 等部分关键字作为字符串字面量查询时在 v0.25 下会报 `NodeType` 错误，目前已在查询中暂时规避。
-- **重复编译仍偏粗粒度**：`rebuild_metadata` 会将 Math/Typst block 重置为 `Pending`，结构编辑后会触发重编译；原型阶段可接受，但后续可引入更细粒度的脏块追踪。
+- **Typst 状态保留已优化**：未变更源码的 Math/Typst/inline-math block 现在会保留已有 `Rendered/Error` 状态，不再在常规 `rebuild_metadata` 后无差别退回 `Pending`。
 - **行内公式仍是整块预览**：当前 paragraph/list/quote 中的 `$...$` 通过整块 Typst SVG 呈现，而不是在原生文本节点中做逐公式内嵌渲染；这是当前最小可行实现。
 - **点击命中仍是字符级近似**：当前 focused editor 通过“每字符可点击单元 + 背景点击回到末尾”完成光标定位，尚未做到基于真实排版 bounds 的左右半区/软换行精确命中。
 
