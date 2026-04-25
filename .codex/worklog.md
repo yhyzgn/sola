@@ -360,3 +360,12 @@
     - `cargo test -p sola-export`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+75. 改进 focused 编辑区的基础观感：
+    - `sola-app` 新增基础光标闪烁循环。
+    - focused 编辑区改用更紧凑的 padding / line-height，并切到更接近代码编辑器的字体与排版参数。
+    - 文本片段和可点击字符单元同步使用统一 line-height，减少此前明显偏大的行距与光标高度割裂。
+76. 编辑体验观感阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）

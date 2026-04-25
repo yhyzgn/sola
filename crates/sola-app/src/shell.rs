@@ -14,6 +14,7 @@ use sola_typst::{RenderKind, TypstError, compile_to_svg};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
+    time::Duration,
 };
 #[cfg(target_os = "linux")]
 use std::{
@@ -55,6 +56,8 @@ struct SolaRoot {
     highlighter: SyntaxHighlighter,
     typst_cache: HashMap<String, TypstAdapter>,
     typst_in_flight: HashSet<String>,
+    cursor_visible: bool,
+    cursor_blink_started: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +83,8 @@ impl SolaRoot {
             highlighter: SyntaxHighlighter::new_rust(),
             typst_cache: HashMap::new(),
             typst_in_flight: HashSet::new(),
+            cursor_visible: true,
+            cursor_blink_started: false,
         }
     }
 
@@ -93,6 +98,34 @@ impl SolaRoot {
     fn toggle_theme(&mut self) {
         self.theme_mode = self.theme_mode.toggle();
         self.sync_theme();
+    }
+
+    fn ensure_cursor_blink_loop(&mut self, cx: &mut Context<Self>) {
+        if self.cursor_blink_started {
+            return;
+        }
+
+        self.cursor_blink_started = true;
+        cx.spawn(|this: WeakEntity<Self>, cx: &mut AsyncApp| {
+            let background = cx.background_executor().clone();
+            let mut async_cx = cx.clone();
+
+            async move {
+                loop {
+                    background.timer(Duration::from_millis(530)).await;
+                    if this
+                        .update(&mut async_cx, |this, cx| {
+                            this.cursor_visible = !this.cursor_visible;
+                            cx.notify();
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        })
+        .detach();
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> Div {
@@ -238,6 +271,7 @@ impl SolaRoot {
     }
 
     fn render_document_surface(&mut self, cx: &mut Context<Self>) -> Div {
+        self.ensure_cursor_blink_loop(cx);
         self.trigger_typst_renders(cx);
         let blocks = self.document.blocks().iter().enumerate().fold(
             div().flex().flex_col().gap(px(14.0)).p(px(24.0)),
@@ -425,15 +459,20 @@ impl SolaRoot {
         };
 
         let content = if is_focused {
+            let editor_font_size = self.theme.typography.code_size as f32;
+            let editor_line_height = editor_font_size * 1.35;
             div().flex_1().child(
                 div()
-                    .p(px(8.0))
+                    .p(px(6.0))
                     .bg(rgb_hex(&self.theme.palette.code_background))
                     .rounded(px(8.0))
+                    .font_family("JetBrains Mono")
+                    .line_height(px(editor_line_height))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
                             window.focus(&this.focus_handle);
+                            this.cursor_visible = true;
                             let end = this.document.focused_text().map(str::len).unwrap_or(0);
                             let changed =
                                 this.document.set_focused_cursor(end, event.modifiers.shift);
@@ -445,8 +484,9 @@ impl SolaRoot {
                     )
                     .child(self.render_highlighted_text(
                         self.document.focused_text().unwrap_or(&block.source),
-                        13.0,
+                        editor_font_size,
                         self.document.focused_cursor(),
+                        self.cursor_visible,
                         Some(cx),
                     )),
             )
@@ -564,7 +604,13 @@ impl SolaRoot {
                         .p(px(14.0))
                         .bg(rgb_hex(&self.theme.palette.code_background))
                         .rounded(px(10.0))
-                        .child(self.render_highlighted_text(&block.rendered, 13.0, None, None)),
+                        .child(self.render_highlighted_text(
+                            &block.rendered,
+                            13.0,
+                            None,
+                            false,
+                            None,
+                        )),
                 ),
             BlockKind::MathBlock => self.render_typst_preview(block, "Math block"),
             BlockKind::TypstBlock => self.render_typst_preview(block, "Typst block"),
@@ -786,6 +832,7 @@ impl SolaRoot {
         text: &str,
         default_size: f32,
         cursor: Option<&CursorState>,
+        cursor_visible: bool,
         cx: Option<&Context<Self>>,
     ) -> Div {
         let spans = self.highlighter.highlight(text);
@@ -793,7 +840,12 @@ impl SolaRoot {
         let palette = &self.theme.palette;
 
         let mut current_offset = 0;
-        let mut content = div().flex().flex_wrap().items_center().gap(px(0.0));
+        let mut content = div()
+            .flex()
+            .flex_wrap()
+            .items_start()
+            .line_height(px(default_size * 1.35))
+            .gap(px(0.0));
 
         for span in spans {
             let start = current_offset;
@@ -849,11 +901,11 @@ impl SolaRoot {
                             cx,
                         ));
                     }
-                    if p == head {
+                    if p == head && cursor_visible {
                         content = content.child(
                             div()
                                 .w(px(2.0))
-                                .h(px(default_size + 2.0))
+                                .h(px(default_size * 1.35))
                                 .bg(rgb_hex(&palette.cursor)),
                         );
                     }
@@ -895,11 +947,11 @@ impl SolaRoot {
         // Actually, let's just check if we ever rendered the cursor.
         // Or simpler: if head == text.len(), append cursor at the end.
         if let Some(cursor) = cursor {
-            if cursor.head == text.len() {
+            if cursor.head == text.len() && cursor_visible {
                 content = content.child(
                     div()
                         .w(px(2.0))
-                        .h(px(default_size + 2.0))
+                        .h(px(default_size * 1.35))
                         .bg(rgb_hex(&palette.cursor)),
                 );
             }
@@ -927,16 +979,22 @@ impl SolaRoot {
 
         if let Some(cx) = cx {
             return clickable_chars(text, start).into_iter().fold(
-                div().flex().items_center().gap(px(0.0)),
+                div()
+                    .flex()
+                    .items_start()
+                    .line_height(px(size * 1.35))
+                    .gap(px(0.0)),
                 |fragment, (offset, ch)| {
                     let mut cell = div()
                         .text_size(px(size))
+                        .line_height(px(size * 1.35))
                         .text_color(rgb_hex(color))
                         .child(ch.clone())
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                                 window.focus(&this.focus_handle);
+                                this.cursor_visible = true;
                                 let changed = this
                                     .document
                                     .set_focused_cursor(offset, event.modifiers.shift);
@@ -958,6 +1016,7 @@ impl SolaRoot {
 
         let mut fragment = div()
             .text_size(px(size))
+            .line_height(px(size * 1.35))
             .text_color(rgb_hex(color))
             .child(text.to_string());
 
@@ -1033,6 +1092,7 @@ impl SolaRoot {
     }
 
     fn handle_focused_key_down(&mut self, event: &gpui::KeyDownEvent) -> bool {
+        self.cursor_visible = true;
         let key = event.keystroke.key.as_str();
         let modifiers = &event.keystroke.modifiers;
         let primary = modifiers.control || modifiers.platform;
