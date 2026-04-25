@@ -400,7 +400,7 @@ impl SolaRoot {
     ) -> impl IntoElement {
         let is_focused = self.document.focused_block() == index;
 
-        let block_container = div()
+        let mut block_container = div()
             .id(("block-container", index))
             .flex()
             .flex_row()
@@ -408,6 +408,15 @@ impl SolaRoot {
             .p(px(8.0))
             .cursor_pointer()
             .track_focus(&self.focus_handle);
+
+        if is_focused {
+            block_container =
+                block_container.on_key_down(cx.listener(|this, event, _window, cx| {
+                    if this.handle_focused_key_down(event) {
+                        cx.notify();
+                    }
+                }));
+        }
 
         // Subtle focused indicator (accent color line on the left)
         let indicator = if is_focused {
@@ -420,38 +429,31 @@ impl SolaRoot {
         };
 
         let content = if is_focused {
-            div()
-                .flex_1()
-                .on_key_down(cx.listener(|this, event, _window, cx| {
-                    if this.handle_focused_key_down(event) {
-                        cx.notify();
-                    }
-                }))
-                .child(
-                    div()
-                        .p(px(8.0))
-                        .bg(rgb_hex(&self.theme.palette.code_background))
-                        .rounded(px(8.0))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                                window.focus(&this.focus_handle);
-                                let end = this.document.focused_text().map(str::len).unwrap_or(0);
-                                let changed =
-                                    this.document.set_focused_cursor(end, event.modifiers.shift);
-                                cx.stop_propagation();
-                                if changed {
-                                    cx.notify();
-                                }
-                            }),
-                        )
-                        .child(self.render_highlighted_text(
-                            self.document.focused_text().unwrap_or(&block.source),
-                            13.0,
-                            self.document.focused_cursor(),
-                            Some(cx),
-                        )),
-                )
+            div().flex_1().child(
+                div()
+                    .p(px(8.0))
+                    .bg(rgb_hex(&self.theme.palette.code_background))
+                    .rounded(px(8.0))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                            window.focus(&this.focus_handle);
+                            let end = this.document.focused_text().map(str::len).unwrap_or(0);
+                            let changed =
+                                this.document.set_focused_cursor(end, event.modifiers.shift);
+                            cx.stop_propagation();
+                            if changed {
+                                cx.notify();
+                            }
+                        }),
+                    )
+                    .child(self.render_highlighted_text(
+                        self.document.focused_text().unwrap_or(&block.source),
+                        13.0,
+                        self.document.focused_cursor(),
+                        Some(cx),
+                    )),
+            )
         } else {
             div().flex_1().child(self.render_blurred_content(block))
         };
@@ -937,7 +939,8 @@ impl SolaRoot {
                         .child(ch.clone())
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                            cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                                window.focus(&this.focus_handle);
                                 let changed = this
                                     .document
                                     .set_focused_cursor(offset, event.modifiers.shift);
@@ -1492,9 +1495,9 @@ mod tests {
     #[cfg(target_os = "linux")]
     use super::unix_socket_reachable;
     use super::{
-        apply_cached_typst_adapter, apply_completed_typst_work, apply_typst_result,
-        clickable_chars, plan_block_click, BlockClickPlan, should_start_typst_compile,
-        typst_adapter_from_result, typst_cache_key, typst_render_request,
+        BlockClickPlan, apply_cached_typst_adapter, apply_completed_typst_work, apply_typst_result,
+        clickable_chars, plan_block_click, should_start_typst_compile, typst_adapter_from_result,
+        typst_cache_key, typst_render_request,
     };
     use sola_document::{DocumentModel, TypstAdapter};
     use sola_typst::{RenderKind, TypstError};

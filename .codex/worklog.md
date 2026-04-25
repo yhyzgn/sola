@@ -322,3 +322,12 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+67. 修复 focused block 的键盘事件路由：
+    - 将 focused block 的 `on_key_down` 从内层 child 挪到与 `track_focus` 相同的 `block_container` 上。
+    - 保持 focused block 背景点击与字符点击都会显式请求窗口焦点。
+    - 这修复了“元素看似处于 focused block，但键盘事件没有进入编辑器处理链”的问题。
+68. Focused block key routing 阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
