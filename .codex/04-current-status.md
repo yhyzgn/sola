@@ -8,6 +8,7 @@
 - **同块点击后的键盘焦点已修复**：即使点击当前已经 focused 的 block，编辑器现在也会重新请求窗口焦点，避免随后左右/上下键没有路由进编辑器。
 - **键盘事件路由已修正**：Focused Block 的 `track_focus` 和 `on_key_down` 现在挂在同一可聚焦元素上，避免“看起来已聚焦但键盘事件没有真正送达”的情况。
 - **编辑面焦点模型已收敛**：编辑区现在使用单一可聚焦 surface 统一承接键盘输入，不再让多个 block 复用同一个 `focus_handle` 争抢焦点。
+- **键盘输入根因已回到框架用法层修复**：这次对照 GPUI 官方 `input.rs` 示例后，编辑区的 `track_focus` 与 `on_key_down` 已统一落到同一个 editor surface，上层 block 仅保留点击/展示职责。
 - **界面已完成“拆除脚手架”美化**：移除了冗余的卡片边框、按钮和标签，实现了纯净的文档视图；引入了 `Auto-apply on blur` 交互，实现了原地编辑与自动保存的无缝衔接。
 - **Typst 预览已扩展到行内公式**：`sola-document` 现在还能为包含 `$...$` 的段落/列表/引用块建立 `TypstAdapter` 状态，`sola-app` 会将这些 blurred block 作为整块 Typst 文本进行异步预览。
 

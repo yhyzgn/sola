@@ -340,3 +340,12 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+71. 对照 GPUI 官方输入示例进一步修正编辑器焦点模型：
+    - 参考 `gpui/examples/input.rs`，将 document surface 作为唯一承接 `track_focus` 与 `on_key_down` 的输入面。
+    - block container 不再共享 `focus_handle`，避免多个 block 对同一焦点句柄的竞争。
+    - 这一轮属于从框架用法层面对键盘输入链路做回退式修正，而不是继续在旧结构上打补丁。
+72. 框架用法回正阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
