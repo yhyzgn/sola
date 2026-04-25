@@ -378,3 +378,12 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+79. 继续收敛编辑区的错行表现：
+    - focused 代码区改为保留显式行结构并启用横向滚动，降低“单行代码被假换行”的问题。
+    - HTML 适配文本去掉固定节点 gap，减少不属于原文的额外断行。
+    - 光标维持零宽视觉方案，避免闪烁或左右移动时推挤后文。
+80. 编辑区错行收敛阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
