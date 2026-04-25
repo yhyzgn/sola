@@ -430,6 +430,14 @@ impl DocumentModel {
         true
     }
 
+    pub fn move_cursor_up(&mut self, shift: bool) -> bool {
+        self.move_cursor_vertical(-1, shift)
+    }
+
+    pub fn move_cursor_down(&mut self, shift: bool) -> bool {
+        self.move_cursor_vertical(1, shift)
+    }
+
     pub fn select_all(&mut self) -> bool {
         let index = self.focused_block;
         let text_len = if let Some(text) = self.focused_text() {
@@ -530,6 +538,34 @@ impl DocumentModel {
         }
         self.rebuild_metadata();
         true
+    }
+
+    fn move_cursor_vertical(&mut self, delta: isize, shift: bool) -> bool {
+        let index = self.focused_block;
+        let Some(text) = self.focused_text() else {
+            return false;
+        };
+
+        let lines = split_lines(text);
+        let head = self.blocks[index].cursor.head;
+        let Some((current_line_index, _current_line_start, current_column)) =
+            line_position_for_offset(text, &lines, head)
+        else {
+            return false;
+        };
+
+        let Some(target_line_index) = current_line_index.checked_add_signed(delta) else {
+            return false;
+        };
+        let Some(target_line) = lines.get(target_line_index).copied() else {
+            return false;
+        };
+
+        let target_line_end = line_end(text, &lines, target_line_index);
+        let target_offset =
+            target_line + nth_char_offset(&text[target_line..target_line_end], current_column);
+
+        self.set_focused_cursor(target_offset, shift)
     }
 }
 
@@ -1202,6 +1238,51 @@ fn contains_inline_math(text: &str) -> bool {
     false
 }
 
+fn split_lines(text: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    for (index, ch) in text.char_indices() {
+        if ch == '\n' && index + ch.len_utf8() <= text.len() {
+            starts.push(index + ch.len_utf8());
+        }
+    }
+    starts
+}
+
+fn line_end(text: &str, line_starts: &[usize], line_index: usize) -> usize {
+    let next_start = line_starts
+        .get(line_index + 1)
+        .copied()
+        .unwrap_or(text.len());
+    if next_start > 0 && text.as_bytes()[next_start.saturating_sub(1)] == b'\n' {
+        next_start - 1
+    } else {
+        next_start
+    }
+}
+
+fn line_position_for_offset(
+    text: &str,
+    line_starts: &[usize],
+    offset: usize,
+) -> Option<(usize, usize, usize)> {
+    let clamped = offset.min(text.len());
+    let line_index = line_starts
+        .partition_point(|start| *start <= clamped)
+        .saturating_sub(1);
+    let line_start = *line_starts.get(line_index)?;
+    let line_end = line_end(text, line_starts, line_index);
+    let column_offset = clamped.min(line_end).saturating_sub(line_start);
+    let column = text[line_start..line_start + column_offset].chars().count();
+    Some((line_index, line_start, column))
+}
+
+fn nth_char_offset(text: &str, column: usize) -> usize {
+    text.char_indices()
+        .nth(column)
+        .map(|(offset, _)| offset)
+        .unwrap_or(text.len())
+}
+
 fn heading_level_to_u8(level: HeadingLevel) -> u8 {
     match level {
         HeadingLevel::H1 => 1,
@@ -1735,6 +1816,50 @@ Plain paragraph without math."#,
 
         assert!(document.move_cursor_right(false));
         assert!(document.set_focused_cursor(4, true));
+
+        let cursor = document.focused_cursor().unwrap();
+        assert_eq!(cursor.head, 4);
+        assert_eq!(cursor.anchor, Some(1));
+    }
+
+    #[test]
+    fn cursor_moves_vertically_across_explicit_lines() {
+        let mut document = DocumentModel::from_markdown("abc\ndef\nghij");
+
+        assert!(document.move_cursor_right(false));
+        assert!(document.move_cursor_right(false));
+        assert_eq!(document.focused_cursor().unwrap().head, 2);
+
+        assert!(document.move_cursor_down(false));
+        assert_eq!(document.focused_cursor().unwrap().head, 6);
+
+        assert!(document.move_cursor_down(false));
+        assert_eq!(document.focused_cursor().unwrap().head, 10);
+
+        assert!(document.move_cursor_up(false));
+        assert_eq!(document.focused_cursor().unwrap().head, 6);
+    }
+
+    #[test]
+    fn cursor_vertical_move_clamps_to_shorter_line_length() {
+        let mut document = DocumentModel::from_markdown("ab\ncdef");
+
+        assert!(document.move_cursor_down(false));
+        assert!(document.move_cursor_right(false));
+        assert!(document.move_cursor_right(false));
+        assert!(document.move_cursor_right(false));
+        assert_eq!(document.focused_cursor().unwrap().head, 6);
+
+        assert!(document.move_cursor_up(false));
+        assert_eq!(document.focused_cursor().unwrap().head, 2);
+    }
+
+    #[test]
+    fn shift_cursor_vertical_move_extends_selection() {
+        let mut document = DocumentModel::from_markdown("ab\ncd");
+
+        assert!(document.move_cursor_right(false));
+        assert!(document.move_cursor_down(true));
 
         let cursor = document.focused_cursor().unwrap();
         assert_eq!(cursor.head, 4);

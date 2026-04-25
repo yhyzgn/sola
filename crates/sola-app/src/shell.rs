@@ -1065,6 +1065,14 @@ impl SolaRoot {
             return self.document.move_cursor_right(modifiers.shift);
         }
 
+        if key.eq_ignore_ascii_case("up") {
+            return self.document.move_cursor_up(modifiers.shift);
+        }
+
+        if key.eq_ignore_ascii_case("down") {
+            return self.document.move_cursor_down(modifiers.shift);
+        }
+
         if primary && key.eq_ignore_ascii_case("a") {
             return self.document.select_all();
         }
@@ -1247,7 +1255,9 @@ fn shortcut_legend(theme: &Theme) -> Div {
         .child(shortcut_chip("Ctrl/Cmd+Shift+Z", "redo", theme))
         .child(shortcut_chip("Alt+↑/↓", "move focus", theme))
         .child(shortcut_chip("←/→", "move cursor", theme))
+        .child(shortcut_chip("↑/↓", "move line", theme))
         .child(shortcut_chip("Shift+←/→", "select", theme))
+        .child(shortcut_chip("Shift+↑/↓", "select line", theme))
         .child(shortcut_chip("Ctrl/Cmd+A", "select all", theme))
         .child(shortcut_chip("Ctrl/Cmd+N", "insert paragraph", theme))
         .child(shortcut_chip("Ctrl/Cmd+D", "duplicate block", theme))

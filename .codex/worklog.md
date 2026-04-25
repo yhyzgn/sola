@@ -303,3 +303,13 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+63. 完成显式换行场景下的垂直光标移动：
+    - `sola-document` 新增 `move_cursor_up` / `move_cursor_down`，按字符列在显式换行文本间垂直移动，并在短行末尾夹紧。
+    - `Shift+↑/↓` 现在可在显式换行场景下扩展选区。
+    - `sola-app` 将 `Up/Down` 键接入 focused block 编辑路径，并同步更新快捷键提示。
+    - 为垂直移动、短行夹紧、`Shift+↑/↓` 选区补充了 TDD 回归测试。
+64. 垂直光标移动阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-document`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
