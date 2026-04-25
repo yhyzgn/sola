@@ -63,6 +63,13 @@ enum ThemeMode {
     Light,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BlockClickPlan {
+    apply_draft: bool,
+    switch_block_focus: bool,
+    refresh_window_focus: bool,
+}
+
 impl SolaRoot {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
@@ -427,7 +434,8 @@ impl SolaRoot {
                         .rounded(px(8.0))
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                            cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+                                window.focus(&this.focus_handle);
                                 let end = this.document.focused_text().map(str::len).unwrap_or(0);
                                 let changed =
                                     this.document.set_focused_cursor(end, event.modifiers.shift);
@@ -452,17 +460,21 @@ impl SolaRoot {
             .child(indicator)
             .child(content)
             .on_click(cx.listener(move |this, _event, window, cx| {
-                if this.document.focused_block() == index {
-                    return;
+                let plan = plan_block_click(
+                    this.document.focused_block(),
+                    index,
+                    this.document.focused_has_draft(),
+                );
+
+                if plan.refresh_window_focus {
+                    window.focus(&this.focus_handle);
                 }
 
-                // Auto-apply draft before moving focus
-                if this.document.focused_has_draft() {
+                if plan.apply_draft {
                     this.document.apply_focused_draft();
                 }
 
-                if this.document.focus_block(index) {
-                    window.focus(&this.focus_handle);
+                if plan.switch_block_focus && this.document.focus_block(index) {
                     cx.notify();
                 }
             }))
@@ -1340,6 +1352,14 @@ fn clickable_chars(text: &str, start: usize) -> Vec<(usize, String)> {
         .collect()
 }
 
+fn plan_block_click(current_index: usize, target_index: usize, has_draft: bool) -> BlockClickPlan {
+    BlockClickPlan {
+        apply_draft: has_draft && current_index != target_index,
+        switch_block_focus: current_index != target_index,
+        refresh_window_focus: true,
+    }
+}
+
 fn typst_cache_key(kind: &RenderKind, source: &str) -> String {
     let prefix = match kind {
         RenderKind::Math => "math",
@@ -1473,8 +1493,8 @@ mod tests {
     use super::unix_socket_reachable;
     use super::{
         apply_cached_typst_adapter, apply_completed_typst_work, apply_typst_result,
-        clickable_chars, should_start_typst_compile, typst_adapter_from_result, typst_cache_key,
-        typst_render_request,
+        clickable_chars, plan_block_click, BlockClickPlan, should_start_typst_compile,
+        typst_adapter_from_result, typst_cache_key, typst_render_request,
     };
     use sola_document::{DocumentModel, TypstAdapter};
     use sola_typst::{RenderKind, TypstError};
@@ -1674,5 +1694,25 @@ $$a + b$$"#,
             document.blocks()[1].typst,
             Some(TypstAdapter::Rendered { ref svg }) if svg == "<svg>stable</svg>"
         ));
+    }
+
+    #[test]
+    fn plan_block_click_keeps_focus_refresh_for_same_block() {
+        assert_eq!(
+            plan_block_click(2, 2, true),
+            BlockClickPlan {
+                apply_draft: false,
+                switch_block_focus: false,
+                refresh_window_focus: true,
+            }
+        );
+        assert_eq!(
+            plan_block_click(1, 3, true),
+            BlockClickPlan {
+                apply_draft: true,
+                switch_block_focus: true,
+                refresh_window_focus: true,
+            }
+        );
     }
 }

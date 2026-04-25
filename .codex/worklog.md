@@ -313,3 +313,12 @@
     - `cargo test -p sola-document`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+65. 修复当前 focused block 点击后的焦点链：
+    - 提取 `plan_block_click` helper，明确“同块点击仍需刷新窗口焦点、但不应切 block 或 auto-apply”的行为。
+    - 当前 focused block 的背景点击和字符点击现在都会显式请求窗口焦点。
+    - 为“同块点击仍需刷新焦点”补充了回归测试，防止后续再因为 click 路径提前返回而丢失键盘事件。
+66. Focused block refocus 阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
