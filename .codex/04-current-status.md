@@ -22,6 +22,7 @@
 - **Typst 复制链路已优化**：复制一个已渲染或已报错的公式 / Typst / inline-math block 时，新块现在会直接继承现有 `TypstAdapter`，避免立即触发无意义的重复编译。
 - **Typst 结果缓存已接入**：`sola-app` 现在会基于 `RenderKind + rendered source` 缓存 Typst 编译结果。重复出现的相同内容会直接命中缓存，而不是再次启动后台编译。
 - **Typst 并发去重已接入**：当同一轮里有多个完全相同的 pending Typst 请求时，`sola-app` 现在只会启动一次后台编译，并在结果返回后批量回填所有匹配 block。
+- **Typst 共享结果回填已修正**：即便最初发起编译的那个 block 在结果返回前已经变更内容，同 key 的其他 pending block 仍会正确拿到这次共享编译结果，不会被误丢。
 - **行内公式仍是整块预览**：当前 paragraph/list/quote 中的 `$...$` 通过整块 Typst SVG 呈现，而不是在原生文本节点中做逐公式内嵌渲染；这是当前最小可行实现。
 - **点击命中仍是字符级近似**：当前 focused editor 通过“每字符可点击单元 + 背景点击回到末尾”完成光标定位，尚未做到基于真实排版 bounds 的左右半区/软换行精确命中。
 

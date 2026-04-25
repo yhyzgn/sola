@@ -294,3 +294,12 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+61. 修复 Typst 共享结果回填路径：
+    - 将“后台编译完成后的回填”抽成 `apply_completed_typst_work` helper。
+    - 去掉了原先对“发起块 source 未变化”的整批短路依赖，避免 origin block 变化时把同 key 其他 pending block 一起误丢。
+    - 为“origin block 已变化，但匹配 peer 仍应收到结果”增加了 TDD 回归测试。
+62. Typst 共享结果回填阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）

@@ -1004,17 +1004,11 @@ impl SolaRoot {
                         this.typst_cache
                             .insert(cache_key.clone(), next_adapter.clone());
 
-                        let Some(current_block) = this.document.blocks().get(index) else {
-                            return;
-                        };
-
-                        if current_block.source != block_source {
-                            return;
-                        }
-
-                        if apply_cached_typst_adapter(
+                        if apply_completed_typst_work(
                             &mut this.document,
                             &cache_key,
+                            index,
+                            &block_source,
                             next_adapter.clone(),
                         ) > 0
                         {
@@ -1401,6 +1395,16 @@ fn apply_cached_typst_adapter(
     updated
 }
 
+fn apply_completed_typst_work(
+    document: &mut DocumentModel,
+    cache_key: &str,
+    _origin_index: usize,
+    _origin_source: &str,
+    adapter: TypstAdapter,
+) -> usize {
+    apply_cached_typst_adapter(document, cache_key, adapter)
+}
+
 #[cfg(target_os = "linux")]
 fn ensure_linux_display_backend() -> Result<(), String> {
     if wayland_socket_reachable() || x11_socket_reachable() {
@@ -1458,8 +1462,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     use super::unix_socket_reachable;
     use super::{
-        apply_cached_typst_adapter, apply_typst_result, clickable_chars,
-        should_start_typst_compile, typst_adapter_from_result, typst_cache_key,
+        apply_cached_typst_adapter, apply_completed_typst_work, apply_typst_result,
+        clickable_chars, should_start_typst_compile, typst_adapter_from_result, typst_cache_key,
         typst_render_request,
     };
     use sola_document::{DocumentModel, TypstAdapter};
@@ -1625,6 +1629,40 @@ $$c + d$$"#,
         assert!(matches!(
             document.blocks()[2].typst,
             Some(TypstAdapter::Pending)
+        ));
+    }
+
+    #[test]
+    fn apply_completed_typst_work_still_updates_matching_peers_when_origin_changed() {
+        let mut document = DocumentModel::from_markdown(
+            r#"$$a + b$$
+
+$$a + b$$"#,
+        );
+
+        document.focus_block(0);
+        document.focused_block_mut().unwrap().source = "$$changed$$".to_string();
+        document.focused_block_mut().unwrap().rendered = "changed".to_string();
+        document.focused_block_mut().unwrap().typst = Some(TypstAdapter::Pending);
+
+        let updated = apply_completed_typst_work(
+            &mut document,
+            &typst_cache_key(&RenderKind::Math, "a + b"),
+            0,
+            "$$a + b$$",
+            TypstAdapter::Rendered {
+                svg: "<svg>stable</svg>".to_string(),
+            },
+        );
+
+        assert_eq!(updated, 1);
+        assert!(matches!(
+            document.blocks()[0].typst,
+            Some(TypstAdapter::Pending)
+        ));
+        assert!(matches!(
+            document.blocks()[1].typst,
+            Some(TypstAdapter::Rendered { ref svg }) if svg == "<svg>stable</svg>"
         ));
     }
 }
