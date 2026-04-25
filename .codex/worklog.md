@@ -387,3 +387,12 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+81. 搭建 focused editor 重构底座：
+    - `sola-app` 新增 `focused_editor` 模块，抽出 focused 编辑区的基础样式参数。
+    - focused 编辑区当前的字体、行高、padding 参数不再散落在 `shell.rs` 内部硬编码。
+    - 这一轮的目标是为下一步迁移到 `TextLayout / WrappedLine` 驱动的真实编辑面提供稳定落点，而不是再继续把复杂度堆回 `shell.rs`。
+82. Focused editor 重构底座阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）

@@ -1,3 +1,4 @@
+use crate::focused_editor::FocusedEditorStyle;
 use gpui::{
     AppContext, Application, AsyncApp, Bounds, Context, Div, FocusHandle, FontWeight, Hsla, Image,
     ImageFormat, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
@@ -459,15 +460,15 @@ impl SolaRoot {
         };
 
         let content = if is_focused {
-            let editor_font_size = self.theme.typography.code_size as f32;
-            let editor_line_height = editor_font_size * 1.35;
+            let editor_style = FocusedEditorStyle::from_theme(&self.theme);
             div().flex_1().child(
                 div()
-                    .p(px(6.0))
+                    .px(editor_style.padding_x)
+                    .py(editor_style.padding_y)
                     .bg(rgb_hex(&self.theme.palette.code_background))
                     .rounded(px(8.0))
-                    .font_family("JetBrains Mono")
-                    .line_height(px(editor_line_height))
+                    .font_family(editor_style.font_family)
+                    .line_height(editor_style.line_height)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
@@ -484,7 +485,7 @@ impl SolaRoot {
                     )
                     .child(self.render_highlighted_text(
                         self.document.focused_text().unwrap_or(&block.source),
-                        editor_font_size,
+                        editor_style.font_size_f32(),
                         self.document.focused_cursor(),
                         self.cursor_visible,
                         Some(cx),
