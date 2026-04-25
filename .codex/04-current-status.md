@@ -18,6 +18,7 @@
 - **Wrapped layout hit-testing groundwork 已建立**：`focused_editor` 现已补齐视觉行 y 命中和 wrapped layout offset 命中 helper，为下一步把点击定位正式迁到真实文本布局模型做好准备。
 - **视觉行 Home/End 已接入**：Focused 编辑区现在会优先把 `Home/End` 解释为“当前视觉行的行首/行尾”，而不是整段文本的绝对开头/结尾。
 - **点击定位已开始接入 wrapped layout**：Focused 编辑区的背景点击现在优先走 wrapped text layout 命中，而不是直接粗暴落到段尾。
+- **Focused editor 已进入 TextLayout/WrappedLine 迁移期**：虽然主渲染仍以现有 highlighter/flex 方案为主，但软换行级别的 `↑/↓`、`Home/End` 和背景点击已经开始共享 wrapped layout helper，后续将继续把字符点击、选区与 caret 绘制迁到同一模型上。
 - **界面已完成“拆除脚手架”美化**：移除了冗余的卡片边框、按钮和标签，实现了纯净的文档视图；引入了 `Auto-apply on blur` 交互，实现了原地编辑与自动保存的无缝衔接。
 - **Typst 预览已扩展到行内公式**：`sola-document` 现在还能为包含 `$...$` 的段落/列表/引用块建立 `TypstAdapter` 状态，`sola-app` 会将这些 blurred block 作为整块 Typst 文本进行异步预览。
 - **离线导出流水线已启动第一阶段**：新增独立的 `sola-export` crate，当前已支持导出当前文档的 `Markdown` 与带主题样式注入的静态 `HTML`。
@@ -31,7 +32,7 @@
 6. **动态 SVG 渲染策略**：GPUI 当前的 `svg()` 元素面向 asset path，不适合直接消费内存中的 SVG 字符串。因此 Typst 的渲染结果通过 `img(Image::from_bytes(ImageFormat::Svg, ...))` 进入 UI，避免了落地临时文件。
 
 ## 剩余技术债/风险 (Risks & Tech Debt)
-- **垂直移动仍未覆盖视觉软换行**：当前 `↑/↓` 已支持显式换行场景，但还没有基于真实布局信息处理 `Flex-wrap` 造成的视觉换行。
+- **垂直移动仍未完全覆盖视觉软换行**：`↑/↓` 已开始接入 wrapped layout helper，但当前只是优先尝试该路径，核心渲染面仍未完全迁移到统一的 TextLayout/WrappedLine 模型。
 - **Tree-sitter 关键字**：在 Rust 查询中，`mut` 等部分关键字作为字符串字面量查询时在 v0.25 下会报 `NodeType` 错误，目前已在查询中暂时规避。
 - **Typst 状态保留已优化**：未变更源码的 Math/Typst/inline-math block 现在会保留已有 `Rendered/Error` 状态，不再在常规 `rebuild_metadata` 后无差别退回 `Pending`。
 - **Typst 复制链路已优化**：复制一个已渲染或已报错的公式 / Typst / inline-math block 时，新块现在会直接继承现有 `TypstAdapter`，避免立即触发无意义的重复编译。
@@ -39,13 +40,20 @@
 - **Typst 并发去重已接入**：当同一轮里有多个完全相同的 pending Typst 请求时，`sola-app` 现在只会启动一次后台编译，并在结果返回后批量回填所有匹配 block。
 - **Typst 共享结果回填已修正**：即便最初发起编译的那个 block 在结果返回前已经变更内容，同 key 的其他 pending block 仍会正确拿到这次共享编译结果，不会被误丢。
 - **行内公式仍是整块预览**：当前 paragraph/list/quote 中的 `$...$` 通过整块 Typst SVG 呈现，而不是在原生文本节点中做逐公式内嵌渲染；这是当前最小可行实现。
-- **点击命中仍是字符级近似**：当前 focused editor 通过“每字符可点击单元 + 背景点击回到末尾”完成光标定位，尚未做到基于真实排版 bounds 的左右半区/软换行精确命中。
+- **点击命中仍未完全统一到真实布局**：背景点击已经优先走 wrapped layout 命中，但字符点击仍主要沿用旧的 flex 片段路径，软换行场景下还存在不一致。
 - **软换行与视觉行距仍需进一步精修**：当前行高已经收紧，但 `↑/↓` 仍只覆盖显式换行，真正的视觉软换行移动和更精确的文本排版还需继续推进。
 - **HTML 适配文本仍需更精细的行内布局**：当前已去掉节点间固定 gap，但真正严丝合缝的 inline rich text 排版还需要从 flex 拼接过渡到更接近文本引擎的布局模型。
-- **Focused 编辑区仍未真正切到 TextLayout/WrappedLine 驱动**：当前只是完成了参数与结构抽离，下一步才会开始把 caret / selection / 点击命中 / 软换行移动真正迁到 GPUI 文本布局模型上。
-- **点击命中仍未切到真实 WrappedLine 布局**：当前点击定位仍主要沿用旧路径，后续需要继续把 click hit-testing 也迁到这套视觉行 helper 上。
+- **Focused 编辑区仍未完全切到 TextLayout/WrappedLine 驱动**：目前已经把 wrapped layout helper 接到部分命令面，但真正的文本绘制、selection 计算和字符级 hit-testing 还没整体迁移完成。
+
+## 当前正在做 (Current In-Flight Direction)
+- **大方向**：把 Focused 编辑区从 `flex + span fragment` 方案迁到 GPUI 文本布局驱动的 custom text surface。
+- **当前子目标**：统一 `↑/↓`、`Home/End`、点击命中到同一套 wrapped layout helper 上。
+- **下一步优先级最高的任务**：
+  1. 把字符点击从旧 `clickable_chars` 路径迁到 wrapped layout hit-testing。
+  2. 把 caret / selection 从 fragment 级视觉拼接迁到真实文本布局下的统一绘制。
+  3. 在这两步稳定后，再继续提升软换行场景下的 `↑/↓` 精度与一致性。
 
 ## 下一步建议 (Next Steps)
 - 继续把 `sola-export` 从 `Markdown/HTML` 扩展到真正的 PDF / 长图目标。
 - 支持更细粒度的 Typst 脏块重渲染与真正的原生 inline formula 布局。
-- 基于真实文本布局数据进一步提升鼠标命中精度，并补上上下方向键跨视觉行移动。
+- 继续完成 Focused editor 的 TextLayout/WrappedLine 迁移，优先统一 click hit-testing、caret、selection。

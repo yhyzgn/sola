@@ -441,3 +441,18 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+93. 继续推进 focused editor 的 TextLayout/WrappedLine 重构：
+    - 新增 `focused_editor` 模块中的 soft-wrap helper 测试与视觉行边界测试。
+    - 将 `Home/End` 接到视觉行边界逻辑，提供用户可直接感知的 wrapped-layout 行为。
+94. 继续把点击命中往 wrapped layout 迁移：
+    - focused editor 背景点击现在优先走 wrapped layout hit-testing，再回退到段尾。
+    - 目标是把 soft-wrap 场景下的点击定位从旧的 flex 近似路线迁出。
+95. 当前尚未完成但已明确的后续重构：
+    - 字符点击仍主要沿用 `clickable_chars` 旧路径；
+    - caret / selection 仍未统一迁到真实文本布局驱动的绘制；
+    - 下一步应继续在 `crates/sola-app/src/focused_editor.rs` 扩展 helper，并把 shell 中 focused 编辑区逐步接过去。
+96. 以上阶段均完成强校验：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
