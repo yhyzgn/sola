@@ -1,4 +1,4 @@
-use gpui::{AppContext, App, AsyncApp, Entity, EventEmitter};
+use gpui::{AppContext, App, Entity, EventEmitter};
 use std::path::{Path, PathBuf};
 use notify::{Watcher, RecursiveMode};
 
@@ -24,7 +24,7 @@ impl EventEmitter<WorktreeEvent> for Worktree {}
 impl Worktree {
     pub fn local(path: impl Into<PathBuf>, cx: &mut App) -> Entity<Self> {
         let abs_path = path.into().canonicalize().unwrap_or_else(|_| PathBuf::from("."));
-        
+
         let handle = cx.new(|_| Self {
             abs_path: abs_path.clone(),
             entries: Vec::new(),
@@ -32,25 +32,47 @@ impl Worktree {
         });
 
         handle.update(cx, |this, _| this.scan());
-        
+
         let weak_handle = handle.downgrade();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let weak_handle_for_setup = weak_handle.clone();
+        let abs_path_for_watcher = abs_path.clone();
+        let (watcher_tx, watcher_rx) = tokio::sync::oneshot::channel();
+        let tx_for_watcher = tx.clone();
         
-        let mut watcher = notify::recommended_watcher(move |res| {
-            if let Ok(_) = res {
-                let _ = tx.send(());
+        std::thread::spawn(move || {
+            let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+                if let Ok(event) = res {
+                    let is_noise = event.paths.iter().any(|p| {
+                        let s = p.to_string_lossy();
+                        s.contains("/target/") || s.contains("/.git/")
+                    });
+                    if !is_noise {
+                        let _ = tx_for_watcher.send(());
+                    }
+                }
+            }).ok();
+
+            if let Some(watcher) = &mut watcher {
+                let _ = watcher.watch(&abs_path_for_watcher, RecursiveMode::Recursive);
             }
-        }).ok();
-
-        if let Some(watcher) = &mut watcher {
-            let _ = watcher.watch(&abs_path, RecursiveMode::Recursive);
-        }
-
-        handle.update(cx, |this, _| {
-            this._watcher = watcher;
+            
+            let _ = watcher_tx.send(watcher);
         });
 
-        cx.spawn(|cx: &mut AsyncApp| {
+        cx.spawn(|cx: &mut gpui::AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                if let Ok(watcher) = watcher_rx.await {
+                    let _ = weak_handle_for_setup.update(&mut cx, |this, _| {
+                        this._watcher = watcher;
+                    });
+                }
+            }
+        }).detach();
+
+        cx.spawn(|cx: &mut gpui::AsyncApp| {
             let mut cx = cx.clone();
             async move {
                 while let Some(_) = rx.recv().await {

@@ -492,4 +492,9 @@
    - **剥离渲染副作用**：将 `trigger_typst_renders` 从 `render` 方法中剔除，改为通过订阅 `WorkspaceEvent::DocumentChanged` 驱动。
    - **重构模型访问**：引入 `update_document` 统一文档修改入口，确保所有的编辑行为（键盘、按钮、点击）都能正确分发事件并触发渲染。
    - 验证通过：`cargo run` 稳定运行，无“Not Responding”现象，Typst 渲染管线响应及时。
+7. **深度修复：彻底消除应用启动时的 20s 假死**：
+   - **异步化 Watcher 注册**：由于 `notify` 递归扫描大型项目根目录（如 `target/`）属于耗时的同步 IO，将其完全移至 `std::thread::spawn` 创建的独立线程中执行。
+   - **非阻塞通信**：利用 `tokio::sync::oneshot` 通道在后台注册完成后异步将 Watcher 传回主线程保存，确保 UI 线程在初始化期间保持 100% 响应。
+   - **事件过滤**：在 Watcher 闭包中增加了对 `/target/` 和 `/.git/` 路径的过滤，避免处理数万个无关的构建产物变更事件。
+   - 验证通过：应用启动恢复“秒开”体验，彻底告别 NRS 20s 的假死现象。
 
