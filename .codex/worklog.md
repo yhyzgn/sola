@@ -369,3 +369,12 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+77. 修正光标宽度与错误换行表现：
+    - 光标从占布局宽度的流内块改为零宽视觉表现，避免闪烁/移动时推挤后文。
+    - 代码区改为“保留显式行结构 + 横向滚动”路径，减少代码内容被错误软换行的问题。
+    - HTML 适配区去掉节点间固定 gap，减少本不该出现的额外断行。
+78. 光标宽度与换行修正阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）

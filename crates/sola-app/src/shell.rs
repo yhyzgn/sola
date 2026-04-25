@@ -488,6 +488,7 @@ impl SolaRoot {
                         self.document.focused_cursor(),
                         self.cursor_visible,
                         Some(cx),
+                        true,
                     )),
             )
         } else {
@@ -601,15 +602,18 @@ impl SolaRoot {
                 )
                 .child(
                     div()
+                        .id(("code-block-scroll", block.id))
                         .p(px(14.0))
                         .bg(rgb_hex(&self.theme.palette.code_background))
                         .rounded(px(10.0))
+                        .overflow_x_scroll()
                         .child(self.render_highlighted_text(
                             &block.rendered,
                             13.0,
                             None,
                             false,
                             None,
+                            false,
                         )),
                 ),
             BlockKind::MathBlock => self.render_typst_preview(block, "Math block"),
@@ -743,7 +747,7 @@ impl SolaRoot {
 
     fn render_html_nodes(&self, nodes: &[HtmlNode], default_size: f32, default_color: &str) -> Div {
         nodes.iter().fold(
-            div().flex().flex_wrap().items_center().gap(px(6.0)),
+            div().flex().flex_wrap().items_start().gap(px(0.0)),
             |content, node| match node {
                 HtmlNode::Text(text) => content.child(
                     div()
@@ -834,7 +838,29 @@ impl SolaRoot {
         cursor: Option<&CursorState>,
         cursor_visible: bool,
         cx: Option<&Context<Self>>,
+        soft_wrap: bool,
     ) -> Div {
+        if !soft_wrap && cursor.is_none() {
+            return text.lines().fold(
+                div().flex().flex_col().items_start().gap(px(0.0)),
+                |content, line| {
+                    content.child(
+                        div()
+                            .whitespace_nowrap()
+                            .line_height(px(default_size * 1.35))
+                            .child(self.render_highlighted_text(
+                                line,
+                                default_size,
+                                None,
+                                false,
+                                None,
+                                true,
+                            )),
+                    )
+                },
+            );
+        }
+
         let spans = self.highlighter.highlight(text);
         let syntax = &self.theme.syntax;
         let palette = &self.theme.palette;
@@ -904,9 +930,10 @@ impl SolaRoot {
                     if p == head && cursor_visible {
                         content = content.child(
                             div()
-                                .w(px(2.0))
+                                .w(px(0.0))
                                 .h(px(default_size * 1.35))
-                                .bg(rgb_hex(&palette.cursor)),
+                                .border_l_2()
+                                .border_color(rgb_hex(&palette.cursor)),
                         );
                     }
                     last_p = p;
@@ -950,9 +977,10 @@ impl SolaRoot {
             if cursor.head == text.len() && cursor_visible {
                 content = content.child(
                     div()
-                        .w(px(2.0))
+                        .w(px(0.0))
                         .h(px(default_size * 1.35))
-                        .bg(rgb_hex(&palette.cursor)),
+                        .border_l_2()
+                        .border_color(rgb_hex(&palette.cursor)),
                 );
             }
         }
