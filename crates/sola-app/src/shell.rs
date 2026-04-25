@@ -330,6 +330,12 @@ impl SolaRoot {
             .flex_1()
             .min_w_0()
             .min_h_0()
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|this, event, _window, cx| {
+                if this.handle_focused_key_down(event) {
+                    cx.notify();
+                }
+            }))
             .child(
                 div()
                     .p(px(24.0))
@@ -400,23 +406,13 @@ impl SolaRoot {
     ) -> impl IntoElement {
         let is_focused = self.document.focused_block() == index;
 
-        let mut block_container = div()
+        let block_container = div()
             .id(("block-container", index))
             .flex()
             .flex_row()
             .gap(px(12.0))
             .p(px(8.0))
-            .cursor_pointer()
-            .track_focus(&self.focus_handle);
-
-        if is_focused {
-            block_container =
-                block_container.on_key_down(cx.listener(|this, event, _window, cx| {
-                    if this.handle_focused_key_down(event) {
-                        cx.notify();
-                    }
-                }));
-        }
+            .cursor_pointer();
 
         // Subtle focused indicator (accent color line on the left)
         let indicator = if is_focused {

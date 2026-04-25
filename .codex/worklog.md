@@ -331,3 +331,12 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+69. 收敛编辑面焦点模型：
+    - 将编辑区改为单一可聚焦 surface 承接 `track_focus` 与 `on_key_down`。
+    - 移除了每个 block 复用同一个 `focus_handle` 的做法，避免多个 block 对同一焦点句柄的竞争。
+    - 这针对“点击后看似 focused，但任何按键都没有进入编辑器”的根因进行了修正。
+70. 单一编辑面焦点模型阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
