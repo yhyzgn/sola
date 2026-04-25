@@ -931,10 +931,18 @@ impl SolaRoot {
                     if p == head && cursor_visible {
                         content = content.child(
                             div()
+                                .relative()
                                 .w(px(0.0))
                                 .h(px(default_size * 1.35))
-                                .border_l_2()
-                                .border_color(rgb_hex(&palette.cursor)),
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .left_0()
+                                        .w(px(2.0))
+                                        .h(px(default_size * 1.35))
+                                        .bg(rgb_hex(&palette.cursor)),
+                                ),
                         );
                     }
                     last_p = p;
@@ -978,10 +986,18 @@ impl SolaRoot {
             if cursor.head == text.len() && cursor_visible {
                 content = content.child(
                     div()
+                        .relative()
                         .w(px(0.0))
                         .h(px(default_size * 1.35))
-                        .border_l_2()
-                        .border_color(rgb_hex(&palette.cursor)),
+                        .child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .w(px(2.0))
+                                .h(px(default_size * 1.35))
+                                .bg(rgb_hex(&palette.cursor)),
+                        ),
                 );
             }
         }

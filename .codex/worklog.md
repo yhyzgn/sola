@@ -396,3 +396,12 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+83. 修正 caret 的绘制方式：
+    - caret 从零宽但仍在文本流内的节点，调整为绝对定位覆盖绘制。
+    - 这一步进一步贴近 GPUI 官方输入示例中“光标独立绘制、不参与文本布局”的模式。
+    - 目标是彻底去掉光标闪烁/移动时仍可能残留的文本推挤与抖动。
+84. Caret 覆盖绘制阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
