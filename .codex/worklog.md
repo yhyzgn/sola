@@ -456,3 +456,18 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+
+## 2026-04-26
+
+1. **重大学术决策：切换至 GPUI 原生编辑器重构方案。**
+   - 背景：当前的 `flex + span Div` 拼接模型（Div-soup）在处理软换行和光标精确度上存在瓶颈。
+   - 决策：参考 Zed 官方实践，决定废弃片段拼接路径，直接在 `crates/sola-app/src/focused_editor.rs` 实现自定义 `gpui::Element`。
+   - 目标：将 Focused Block 渲染、光标、选区以及点击命中全部收拢到单一自定义 Element 内部，实现像素级精确渲染与极速响应。
+   - 产出规划：`.codex/plans/2026-04-26-gpui-idiomatic-editor-refactor.md`。
+2. **落地 FocusedEditorElement 重构第一阶段**：
+   - 在 `focused_editor.rs` 中实现了自定义 `gpui::Element`：`FocusedEditorElement`。
+   - 实现了基于 `TextSystem` 的高性能绘制管线，统一了选区背景、文本、光标的 Paint 流程。
+   - 引入 `spans_to_runs` 转换工具，将 Tree-sitter 高亮结果直接映射为 GPUI 的 `TextRun`。
+   - 成功在 `shell.rs` 中替换了旧的 `render_highlighted_text` (Div-soup) 方案。
+   - 验证通过：新渲染引擎在运行态下显示正常，光标定位基本工作。
+   - 清理了 shell 中数百行冗余的高亮片段拼接逻辑。

@@ -1,8 +1,55 @@
 use gpui::{
-    Font, FontFeatures, FontStyle, FontWeight, Hsla, Pixels, Point, SharedString, TextRun, Window,
-    WrappedLine, px,
+    App, Bounds, Element, ElementId, Font, FontFeatures, FontStyle, FontWeight, GlobalElementId,
+    Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, Point, SharedString, Style, TextAlign,
+    TextRun, Window, WrappedLine, px,
 };
-use sola_theme::Theme;
+use sola_document::highlighter::{HighlightKind, HighlightedSpan};
+use sola_document::CursorState;
+use sola_theme::{Theme, parse_hex_color};
+
+fn rgb_hex(hex: &str) -> Hsla {
+    gpui::rgb(parse_hex_color(hex).unwrap_or(0xffffff)).into()
+}
+
+pub fn spans_to_runs(
+    spans: &[HighlightedSpan],
+    style: &FocusedEditorStyle,
+    theme: &Theme,
+) -> Vec<TextRun> {
+    let syntax = &theme.syntax;
+    let palette = &theme.palette;
+
+    spans
+        .iter()
+        .map(|span| {
+            let color = match span.kind {
+                HighlightKind::Keyword => &syntax.keyword,
+                HighlightKind::String => &syntax.string,
+                HighlightKind::Comment => &syntax.comment,
+                HighlightKind::Function => &syntax.function,
+                HighlightKind::Number => &syntax.number,
+                HighlightKind::Constant => &syntax.constant,
+                HighlightKind::TypeName => &syntax.type_name,
+                HighlightKind::Other => &palette.text_primary,
+            };
+
+            TextRun {
+                len: span.text.len(),
+                font: Font {
+                    family: style.font_family.into(),
+                    features: gpui::FontFeatures::default(),
+                    fallbacks: None,
+                    weight: FontWeight::default(),
+                    style: FontStyle::default(),
+                },
+                color: rgb_hex(color),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            }
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FocusedEditorStyle {
@@ -233,6 +280,200 @@ pub fn hit_test_visual_offset(
         .unwrap_or_else(|index| index);
 
     Some(line.global_start + local.saturating_sub(line.wrapped_line_start))
+}
+
+pub struct FocusedEditorElement {
+    text: SharedString,
+    style: FocusedEditorStyle,
+    runs: Vec<TextRun>,
+    cursor: Option<CursorState>,
+    cursor_visible: bool,
+    selection_color: Hsla,
+    cursor_color: Hsla,
+}
+
+impl FocusedEditorElement {
+    pub fn new(
+        text: impl Into<SharedString>,
+        style: FocusedEditorStyle,
+        runs: Vec<TextRun>,
+        cursor: Option<CursorState>,
+        cursor_visible: bool,
+        selection_color: Hsla,
+        cursor_color: Hsla,
+    ) -> Self {
+        Self {
+            text: text.into(),
+            style,
+            runs,
+            cursor,
+            cursor_visible,
+            selection_color,
+            cursor_color,
+        }
+    }
+}
+
+pub struct FocusedEditorState {
+    lines: Vec<WrappedLine>,
+}
+
+impl Element for FocusedEditorElement {
+    type RequestLayoutState = Vec<WrappedLine>;
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _global_id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let style = Style::default();
+        let wrap_width = approximate_editor_wrap_width(window.bounds().size.width);
+        let lines = window
+            .text_system()
+            .shape_text(
+                self.text.clone(),
+                self.style.font_size,
+                &self.runs,
+                Some(wrap_width),
+                None,
+            )
+            .unwrap_or_default()
+            .into_vec();
+
+        let layout_id = window.request_layout(style, None, cx);
+
+        (layout_id, lines)
+    }
+
+    fn prepaint(
+        &mut self,
+        _global_id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout_state: &mut Self::RequestLayoutState,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Self::PrepaintState {
+        ()
+    }
+
+    fn paint(
+        &mut self,
+        _global_id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        request_layout_state: &mut Self::RequestLayoutState,
+        _prepaint_state: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let line_height = self.style.line_height;
+        let padding = Point {
+            x: self.style.padding_x,
+            y: self.style.padding_y,
+        };
+        let text_bounds = Bounds {
+            origin: bounds.origin + padding,
+            size: gpui::size(
+                bounds.size.width - self.style.padding_x * 2.0,
+                bounds.size.height - self.style.padding_y * 2.0,
+            ),
+        };
+
+        // 1. Paint Selection
+        if let Some(cursor) = &self.cursor
+            && let Some(anchor) = cursor.anchor
+        {
+            let start = anchor.min(cursor.head);
+            let end = anchor.max(cursor.head);
+
+            let visual_lines = collect_visual_lines(request_layout_state);
+            for visual_line in visual_lines {
+                let overlap_start = start.max(visual_line.global_start);
+                let overlap_end = end.min(visual_line.global_end);
+
+                if overlap_start < overlap_end {
+                    let local_start =
+                        visual_line.wrapped_line_start + (overlap_start - visual_line.global_start);
+                    let local_end =
+                        visual_line.wrapped_line_start + (overlap_end - visual_line.global_start);
+
+                    let x_start = visual_line.line.unwrapped_layout.x_for_index(local_start);
+                    let x_end = visual_line.line.unwrapped_layout.x_for_index(local_end);
+
+                    let selection_bounds = Bounds {
+                        origin: text_bounds.origin
+                            + Point {
+                                x: x_start,
+                                y: line_height * visual_line.global_row as f32,
+                            },
+                        size: gpui::size(x_end - x_start, line_height),
+                    };
+
+                    window.paint_quad(gpui::fill(selection_bounds, self.selection_color));
+                }
+            }
+        }
+
+        // 2. Paint Text
+        let mut y_offset = Pixels::ZERO;
+        for line in request_layout_state.iter() {
+            line.paint(
+                text_bounds.origin + Point { x: Pixels::ZERO, y: y_offset },
+                line_height,
+                TextAlign::Left,
+                None,
+                window,
+                cx,
+            )
+            .ok();
+            y_offset += line_height;
+        }
+
+        // 3. Paint Caret
+        if let Some(cursor) = &self.cursor
+            && self.cursor_visible
+        {
+            let visual_lines = collect_visual_lines(request_layout_state);
+            if let Some(visual_line_idx) = find_visual_line_ref(&visual_lines, cursor.head) {
+                let visual_line = &visual_lines[visual_line_idx];
+                let local_offset =
+                    visual_line.wrapped_line_start + (cursor.head - visual_line.global_start);
+
+                let x = visual_line.line.unwrapped_layout.x_for_index(local_offset);
+
+                let caret_bounds = Bounds {
+                    origin: text_bounds.origin
+                        + Point {
+                            x,
+                            y: line_height * visual_line.global_row as f32,
+                        },
+                    size: gpui::size(self.style.caret_width, line_height),
+                };
+
+                window.paint_quad(gpui::fill(caret_bounds, self.cursor_color));
+            }
+        }
+    }
+}
+
+impl IntoElement for FocusedEditorElement {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
 }
 
 #[cfg(test)]

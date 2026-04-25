@@ -1,6 +1,7 @@
 use crate::focused_editor::{
-    FocusedEditorStyle, approximate_editor_wrap_width, hit_test_visual_offset,
-    move_cursor_vertical_visual, shape_focused_lines, visual_line_edge_offset, visual_line_ranges,
+    FocusedEditorElement, FocusedEditorStyle, approximate_editor_wrap_width,
+    hit_test_visual_offset, move_cursor_vertical_visual, shape_focused_lines, spans_to_runs,
+    visual_line_edge_offset, visual_line_ranges,
 };
 use gpui::{
     AppContext, Application, AsyncApp, Bounds, Context, Div, FocusHandle, FontWeight, Hsla, Image,
@@ -9,10 +10,8 @@ use gpui::{
     px, rgb, size,
 };
 use sola_core::{APP_NAME, APP_TAGLINE, ROADMAP_PHASES, sample_markdown};
-use sola_document::highlighter::{HighlightKind, SyntaxHighlighter};
-use sola_document::{
-    BlockKind, CursorState, DocumentBlock, DocumentModel, HtmlAdapter, HtmlNode, TypstAdapter,
-};
+use sola_document::highlighter::SyntaxHighlighter;
+use sola_document::{BlockKind, DocumentBlock, DocumentModel, HtmlAdapter, HtmlNode, TypstAdapter};
 use sola_theme::{Theme, parse_hex_color};
 use sola_typst::{RenderKind, TypstError, compile_to_svg};
 use std::{
@@ -464,14 +463,16 @@ impl SolaRoot {
 
         let content = if is_focused {
             let editor_style = FocusedEditorStyle::from_theme(&self.theme);
+            let text = self.document.focused_text().unwrap_or(&block.source).to_string();
+            let spans = self.highlighter.highlight(&text);
+            let runs = spans_to_runs(&spans, &editor_style, &self.theme);
+            let selection_color = rgb_hex(&self.theme.palette.selection);
+            let cursor_color = rgb_hex(&self.theme.palette.cursor);
+
             div().flex_1().child(
                 div()
-                    .px(editor_style.padding_x)
-                    .py(editor_style.padding_y)
                     .bg(rgb_hex(&self.theme.palette.code_background))
                     .rounded(px(8.0))
-                    .font_family(editor_style.font_family)
-                    .line_height(editor_style.line_height)
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
@@ -494,13 +495,14 @@ impl SolaRoot {
                             }
                         }),
                     )
-                    .child(self.render_highlighted_text(
-                        self.document.focused_text().unwrap_or(&block.source),
-                        editor_style.font_size_f32(),
-                        self.document.focused_cursor(),
+                    .child(FocusedEditorElement::new(
+                        text,
+                        editor_style,
+                        runs,
+                        self.document.focused_cursor().cloned(),
                         self.cursor_visible,
-                        Some(cx),
-                        true,
+                        selection_color,
+                        cursor_color,
                     )),
             )
         } else {
@@ -596,38 +598,45 @@ impl SolaRoot {
                         &self.theme.palette.text_muted,
                     )
                 }),
-            BlockKind::CodeFence { language } => div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(rgb_hex(&self.theme.palette.text_muted))
-                        .child(format!(
-                            "Code fence{}",
-                            language
-                                .as_ref()
-                                .map(|lang| format!(" · {}", lang))
-                                .unwrap_or_default()
-                        )),
-                )
-                .child(
-                    div()
-                        .id(("code-block-scroll", block.id))
-                        .p(px(14.0))
-                        .bg(rgb_hex(&self.theme.palette.code_background))
-                        .rounded(px(10.0))
-                        .overflow_x_scroll()
-                        .child(self.render_highlighted_text(
-                            &block.rendered,
-                            13.0,
-                            None,
-                            false,
-                            None,
-                            false,
-                        )),
-                ),
+            BlockKind::CodeFence { language } => {
+                let editor_style = FocusedEditorStyle::from_theme(&self.theme);
+                let spans = self.highlighter.highlight(&block.rendered);
+                let runs = spans_to_runs(&spans, &editor_style, &self.theme);
+
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(rgb_hex(&self.theme.palette.text_muted))
+                            .child(format!(
+                                "Code fence{}",
+                                language
+                                    .as_ref()
+                                    .map(|lang| format!(" · {}", lang))
+                                    .unwrap_or_default()
+                            )),
+                    )
+                    .child(
+                        div()
+                            .id(("code-block-scroll", block.id))
+                            .p(px(14.0))
+                            .bg(rgb_hex(&self.theme.palette.code_background))
+                            .rounded(px(10.0))
+                            .overflow_x_scroll()
+                            .child(FocusedEditorElement::new(
+                                &block.rendered,
+                                editor_style,
+                                runs,
+                                None,
+                                false,
+                                rgb_hex(&self.theme.palette.selection),
+                                rgb_hex(&self.theme.palette.cursor),
+                            )),
+                    )
+            }
             BlockKind::MathBlock => self.render_typst_preview(block, "Math block"),
             BlockKind::TypstBlock => self.render_typst_preview(block, "Typst block"),
         }
@@ -841,245 +850,6 @@ impl SolaRoot {
                 ),
             },
         )
-    }
-
-    fn render_highlighted_text(
-        &self,
-        text: &str,
-        default_size: f32,
-        cursor: Option<&CursorState>,
-        cursor_visible: bool,
-        cx: Option<&Context<Self>>,
-        soft_wrap: bool,
-    ) -> Div {
-        if !soft_wrap && cursor.is_none() {
-            return text.lines().fold(
-                div().flex().flex_col().items_start().gap(px(0.0)),
-                |content, line| {
-                    content.child(
-                        div()
-                            .whitespace_nowrap()
-                            .line_height(px(default_size * 1.35))
-                            .child(self.render_highlighted_text(
-                                line,
-                                default_size,
-                                None,
-                                false,
-                                None,
-                                true,
-                            )),
-                    )
-                },
-            );
-        }
-
-        let spans = self.highlighter.highlight(text);
-        let syntax = &self.theme.syntax;
-        let palette = &self.theme.palette;
-
-        let mut current_offset = 0;
-        let mut content = div()
-            .flex()
-            .flex_wrap()
-            .items_start()
-            .line_height(px(default_size * 1.35))
-            .gap(px(0.0));
-
-        for span in spans {
-            let start = current_offset;
-            let end = current_offset + span.text.len();
-            current_offset = end;
-
-            let color = match span.kind {
-                HighlightKind::Keyword => &syntax.keyword,
-                HighlightKind::String => &syntax.string,
-                HighlightKind::Comment => &syntax.comment,
-                HighlightKind::Function => &syntax.function,
-                HighlightKind::Number => &syntax.number,
-                HighlightKind::Constant => &syntax.constant,
-                HighlightKind::TypeName => &syntax.type_name,
-                HighlightKind::Other => &palette.text_primary,
-            };
-
-            if let Some(cursor) = cursor {
-                let head = cursor.head;
-                let anchor = cursor.anchor;
-                let sel_start = anchor.map(|a| a.min(head));
-                let sel_end = anchor.map(|a| a.max(head));
-
-                let mut split_points = Vec::new();
-                if head >= start && head <= end {
-                    split_points.push(head);
-                }
-                if let Some(s) = sel_start {
-                    if s >= start && s <= end {
-                        split_points.push(s);
-                    }
-                }
-                if let Some(e) = sel_end {
-                    if e >= start && e <= end {
-                        split_points.push(e);
-                    }
-                }
-                split_points.sort();
-                split_points.dedup();
-
-                let mut last_p = start;
-                for p in split_points {
-                    if p > last_p {
-                        let sub_text = &span.text[last_p - start..p - start];
-                        content = content.child(self.render_span_fragment(
-                            sub_text,
-                            default_size,
-                            color,
-                            last_p,
-                            p,
-                            sel_start,
-                            sel_end,
-                            cx,
-                        ));
-                    }
-                    if p == head && cursor_visible {
-                        content = content.child(
-                            div()
-                                .relative()
-                                .w(px(0.0))
-                                .h(px(default_size * 1.35))
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .top_0()
-                                        .left_0()
-                                        .w(px(2.0))
-                                        .h(px(default_size * 1.35))
-                                        .bg(rgb_hex(&palette.cursor)),
-                                ),
-                        );
-                    }
-                    last_p = p;
-                }
-                if last_p < end {
-                    let sub_text = &span.text[last_p - start..end - start];
-                    content = content.child(self.render_span_fragment(
-                        sub_text,
-                        default_size,
-                        color,
-                        last_p,
-                        end,
-                        sel_start,
-                        sel_end,
-                        cx,
-                    ));
-                }
-            } else {
-                content = content.child(
-                    div()
-                        .text_size(px(default_size))
-                        .text_color(rgb_hex(color))
-                        .child(span.text.clone()),
-                );
-            }
-        }
-
-        // If cursor is at the very end of the text
-        if let Some(cursor) = cursor {
-            if cursor.head == text.len() && !text.ends_with('\n') {
-                // If the loop didn't render the cursor because it's exactly at text.len()
-                // and we didn't have a span ending exactly there that triggered the p == head check
-                // or if the text is empty.
-                // Wait, if text is empty, the loop won't run.
-            }
-        }
-
-        // Actually, let's just check if we ever rendered the cursor.
-        // Or simpler: if head == text.len(), append cursor at the end.
-        if let Some(cursor) = cursor {
-            if cursor.head == text.len() && cursor_visible {
-                content = content.child(
-                    div()
-                        .relative()
-                        .w(px(0.0))
-                        .h(px(default_size * 1.35))
-                        .child(
-                            div()
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .w(px(2.0))
-                                .h(px(default_size * 1.35))
-                                .bg(rgb_hex(&palette.cursor)),
-                        ),
-                );
-            }
-        }
-
-        content
-    }
-
-    fn render_span_fragment(
-        &self,
-        text: &str,
-        size: f32,
-        color: &str,
-        start: usize,
-        end: usize,
-        sel_start: Option<usize>,
-        sel_end: Option<usize>,
-        cx: Option<&Context<Self>>,
-    ) -> Div {
-        let is_selected = if let (Some(s), Some(e)) = (sel_start, sel_end) {
-            start >= s && end <= e
-        } else {
-            false
-        };
-
-        if let Some(cx) = cx {
-            return clickable_chars(text, start).into_iter().fold(
-                div()
-                    .flex()
-                    .items_start()
-                    .line_height(px(size * 1.35))
-                    .gap(px(0.0)),
-                |fragment, (offset, ch)| {
-                    let mut cell = div()
-                        .text_size(px(size))
-                        .line_height(px(size * 1.35))
-                        .text_color(rgb_hex(color))
-                        .child(ch.clone())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
-                                window.focus(&this.focus_handle);
-                                this.cursor_visible = true;
-                                let changed = this
-                                    .document
-                                    .set_focused_cursor(offset, event.modifiers.shift);
-                                cx.stop_propagation();
-                                if changed {
-                                    cx.notify();
-                                }
-                            }),
-                        );
-
-                    if is_selected {
-                        cell = cell.bg(rgb_hex(&self.theme.palette.selection));
-                    }
-
-                    fragment.child(cell)
-                },
-            );
-        }
-
-        let mut fragment = div()
-            .text_size(px(size))
-            .line_height(px(size * 1.35))
-            .text_color(rgb_hex(color))
-            .child(text.to_string());
-
-        if is_selected {
-            fragment = fragment.bg(rgb_hex(&self.theme.palette.selection));
-        }
-        fragment
     }
 }
 
@@ -1315,6 +1085,7 @@ impl SolaRoot {
             wrap_width,
         )?;
 
+        // TODO: Figure out local point translation in next phase
         hit_test_visual_offset(&lines, point, style.line_height)
     }
 }
@@ -1531,12 +1302,6 @@ fn apply_typst_adapter(block: &mut DocumentBlock, adapter: TypstAdapter) -> bool
     true
 }
 
-fn clickable_chars(text: &str, start: usize) -> Vec<(usize, String)> {
-    text.char_indices()
-        .map(|(offset, ch)| (start + offset, ch.to_string()))
-        .collect()
-}
-
 fn plan_block_click(current_index: usize, target_index: usize, has_draft: bool) -> BlockClickPlan {
     BlockClickPlan {
         apply_draft: has_draft && current_index != target_index,
@@ -1678,8 +1443,8 @@ mod tests {
     use super::unix_socket_reachable;
     use super::{
         BlockClickPlan, apply_cached_typst_adapter, apply_completed_typst_work, apply_typst_result,
-        clickable_chars, plan_block_click, should_start_typst_compile, typst_adapter_from_result,
-        typst_cache_key, typst_render_request,
+        plan_block_click, should_start_typst_compile, typst_adapter_from_result, typst_cache_key,
+        typst_render_request,
     };
     use sola_document::{DocumentModel, TypstAdapter};
     use sola_typst::{RenderKind, TypstError};
@@ -1752,20 +1517,6 @@ Hello
 
         assert!(matches!(kind, RenderKind::Block));
         assert_eq!(source, "Paragraph with $a + b$ inline math.");
-    }
-
-    #[test]
-    fn clickable_chars_preserve_utf8_offsets() {
-        let chars = clickable_chars("a好b", 10);
-
-        assert_eq!(
-            chars,
-            vec![
-                (10, "a".to_string()),
-                (11, "好".to_string()),
-                (14, "b".to_string())
-            ]
-        );
     }
 
     #[test]
