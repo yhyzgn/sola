@@ -1,6 +1,6 @@
 use crate::focused_editor::{
     FocusedEditorStyle, approximate_editor_wrap_width, move_cursor_vertical_visual,
-    shape_focused_lines,
+    shape_focused_lines, visual_line_edge_offset, visual_line_ranges,
 };
 use gpui::{
     AppContext, Application, AsyncApp, Bounds, Context, Div, FocusHandle, FontWeight, Hsla, Image,
@@ -1198,6 +1198,18 @@ impl SolaRoot {
             return self.document.move_cursor_down(modifiers.shift);
         }
 
+        if key.eq_ignore_ascii_case("home") {
+            if let Some(target) = self.soft_wrapped_line_edge(window, false) {
+                return self.document.set_focused_cursor(target, modifiers.shift);
+            }
+        }
+
+        if key.eq_ignore_ascii_case("end") {
+            if let Some(target) = self.soft_wrapped_line_edge(window, true) {
+                return self.document.set_focused_cursor(target, modifiers.shift);
+            }
+        }
+
         if primary && key.eq_ignore_ascii_case("a") {
             return self.document.select_all();
         }
@@ -1260,6 +1272,23 @@ impl SolaRoot {
         )?;
 
         move_cursor_vertical_visual(&lines, cursor.head, delta, style.line_height)
+    }
+
+    fn soft_wrapped_line_edge(&self, window: &mut Window, line_end: bool) -> Option<usize> {
+        let text = self.document.focused_text()?;
+        let cursor = self.document.focused_cursor()?;
+        let style = FocusedEditorStyle::from_theme(&self.theme);
+        let wrap_width = approximate_editor_wrap_width(window.bounds().size.width);
+        let lines = shape_focused_lines(
+            window,
+            text,
+            &style,
+            rgb_hex(&self.theme.palette.text_primary),
+            wrap_width,
+        )?;
+
+        let visual = visual_line_ranges(&lines);
+        visual_line_edge_offset(&visual, cursor.head, line_end)
     }
 }
 

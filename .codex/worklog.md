@@ -423,3 +423,12 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+89. 接入视觉行级别的 Home/End：
+    - `focused_editor` 新增视觉行边界 helper。
+    - `sola-app` 的 `Home/End` 现在优先走 wrapped layout 的视觉行边界，再回退到旧行为。
+    - 这提供了一个用户可直接感知的 wrapped-layout 编辑收益，也验证了这条真实布局路线已经开始接管编辑器行为。
+90. 视觉行 Home/End 阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）

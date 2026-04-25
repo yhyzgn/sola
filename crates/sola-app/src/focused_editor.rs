@@ -34,6 +34,13 @@ impl FocusedEditorStyle {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrappedVisualLine {
+    pub start: usize,
+    pub end: usize,
+    pub row: usize,
+}
+
 #[derive(Clone)]
 struct VisualLineRef {
     global_start: usize,
@@ -91,7 +98,7 @@ pub fn move_cursor_vertical_visual(
     line_height: Pixels,
 ) -> Option<usize> {
     let visual_lines = collect_visual_lines(lines);
-    let current_visual_line = find_visual_line(&visual_lines, current_offset)?;
+    let current_visual_line = find_visual_line_ref(&visual_lines, current_offset)?;
     let target_global_row = shift_visual_row(
         visual_lines.get(current_visual_line)?.global_row,
         delta,
@@ -120,6 +127,17 @@ pub fn move_cursor_vertical_visual(
         .unwrap_or_else(|index| index);
 
     Some(target.global_start + target_local.saturating_sub(target.wrapped_line_start))
+}
+
+pub fn visual_line_edge_offset(
+    lines: &[WrappedVisualLine],
+    current_offset: usize,
+    line_end: bool,
+) -> Option<usize> {
+    let current_visual_line = find_visual_line(lines, current_offset)?;
+    let line = lines.get(current_visual_line)?;
+
+    Some(if line_end { line.end } else { line.start })
 }
 
 fn collect_visual_lines(lines: &[WrappedLine]) -> Vec<VisualLineRef> {
@@ -158,7 +176,24 @@ fn collect_visual_lines(lines: &[WrappedLine]) -> Vec<VisualLineRef> {
     visual
 }
 
-fn find_visual_line(lines: &[VisualLineRef], offset: usize) -> Option<usize> {
+pub fn visual_line_ranges(lines: &[WrappedLine]) -> Vec<WrappedVisualLine> {
+    collect_visual_lines(lines)
+        .into_iter()
+        .map(|line| WrappedVisualLine {
+            start: line.global_start,
+            end: line.global_end,
+            row: line.global_row,
+        })
+        .collect()
+}
+
+fn find_visual_line(lines: &[WrappedVisualLine], offset: usize) -> Option<usize> {
+    lines
+        .iter()
+        .position(|line| offset >= line.start && offset <= line.end)
+}
+
+fn find_visual_line_ref(lines: &[VisualLineRef], offset: usize) -> Option<usize> {
     lines
         .iter()
         .position(|line| offset >= line.global_start && offset <= line.global_end)
@@ -236,5 +271,26 @@ mod tests {
         assert_eq!(visual_row_for_y(px(0.0), px(18.0), 3), Some(0));
         assert_eq!(visual_row_for_y(px(20.0), px(18.0), 3), Some(1));
         assert_eq!(visual_row_for_y(px(60.0), px(18.0), 3), None);
+    }
+
+    #[test]
+    fn visual_line_edge_offset_returns_current_visual_line_edges() {
+        let lines = vec![
+            WrappedVisualLine {
+                start: 0,
+                end: 10,
+                row: 0,
+            },
+            WrappedVisualLine {
+                start: 11,
+                end: 14,
+                row: 1,
+            },
+        ];
+
+        assert_eq!(visual_line_edge_offset(&lines, 3, false), Some(0));
+        assert_eq!(visual_line_edge_offset(&lines, 3, true), Some(10));
+        assert_eq!(visual_line_edge_offset(&lines, 11, false), Some(11));
+        assert_eq!(visual_line_edge_offset(&lines, 11, true), Some(14));
     }
 }
