@@ -1,6 +1,6 @@
 use crate::focused_editor::{
-    FocusedEditorStyle, approximate_editor_wrap_width, move_cursor_vertical_visual,
-    shape_focused_lines, visual_line_edge_offset, visual_line_ranges,
+    FocusedEditorStyle, approximate_editor_wrap_width, hit_test_visual_offset,
+    move_cursor_vertical_visual, shape_focused_lines, visual_line_edge_offset, visual_line_ranges,
 };
 use gpui::{
     AppContext, Application, AsyncApp, Bounds, Context, Div, FocusHandle, FontWeight, Hsla, Image,
@@ -477,9 +477,17 @@ impl SolaRoot {
                         cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
                             window.focus(&this.focus_handle);
                             this.cursor_visible = true;
-                            let end = this.document.focused_text().map(str::len).unwrap_or(0);
-                            let changed =
-                                this.document.set_focused_cursor(end, event.modifiers.shift);
+                            let changed = this
+                                .soft_wrapped_hit_test(window, event.position)
+                                .map(|offset| {
+                                    this.document
+                                        .set_focused_cursor(offset, event.modifiers.shift)
+                                })
+                                .unwrap_or_else(|| {
+                                    let end =
+                                        this.document.focused_text().map(str::len).unwrap_or(0);
+                                    this.document.set_focused_cursor(end, event.modifiers.shift)
+                                });
                             cx.stop_propagation();
                             if changed {
                                 cx.notify();
@@ -1289,6 +1297,25 @@ impl SolaRoot {
 
         let visual = visual_line_ranges(&lines);
         visual_line_edge_offset(&visual, cursor.head, line_end)
+    }
+
+    fn soft_wrapped_hit_test(
+        &self,
+        window: &mut Window,
+        point: gpui::Point<gpui::Pixels>,
+    ) -> Option<usize> {
+        let text = self.document.focused_text()?;
+        let style = FocusedEditorStyle::from_theme(&self.theme);
+        let wrap_width = approximate_editor_wrap_width(window.bounds().size.width);
+        let lines = shape_focused_lines(
+            window,
+            text,
+            &style,
+            rgb_hex(&self.theme.palette.text_primary),
+            wrap_width,
+        )?;
+
+        hit_test_visual_offset(&lines, point, style.line_height)
     }
 }
 

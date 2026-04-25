@@ -432,3 +432,12 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+91. 开始把点击定位接到 wrapped layout：
+    - focused editor 的背景点击现在优先使用 wrapped text layout 的 hit-testing helper 计算目标 offset。
+    - 当 wrapped layout 路径拿不到结果时，仍保留原先回退到段尾的兜底行为。
+    - 这使点击软换行后的第二行或长行中部时，行为开始更接近真实编辑器。
+92. Wrapped layout 点击接线阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
