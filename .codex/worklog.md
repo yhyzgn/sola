@@ -284,3 +284,13 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+59. 完成 Typst in-flight 去重：
+    - `sola-app` 将 `typst_in_flight` 从按 block index 追踪改为按 cache key 追踪。
+    - 同 key 的 pending block 现在在同一轮只会启动一次后台编译。
+    - 编译完成后，结果会批量应用到所有仍然匹配该 key 的 pending block。
+    - 为“是否应启动编译”和“批量回填缓存结果”两个 helper 增加了 TDD 回归测试。
+60. Typst in-flight 去重阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）

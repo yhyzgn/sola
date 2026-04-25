@@ -54,7 +54,7 @@ struct SolaRoot {
     document: DocumentModel,
     highlighter: SyntaxHighlighter,
     typst_cache: HashMap<String, TypstAdapter>,
-    typst_in_flight: HashSet<usize>,
+    typst_in_flight: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -965,10 +965,6 @@ impl SolaRoot {
             .iter()
             .enumerate()
             .filter_map(|(index, block)| {
-                if self.typst_in_flight.contains(&index) {
-                    return None;
-                }
-
                 let Some(TypstAdapter::Pending) = block.typst.as_ref() else {
                     return None;
                 };
@@ -982,20 +978,17 @@ impl SolaRoot {
 
         for (index, block_source, kind, source, cache_key) in requests {
             if let Some(cached) = self.typst_cache.get(&cache_key).cloned() {
-                let previous_focus = self.document.focused_block();
-                if self.document.focus_block(index) {
-                    if let Some(block) = self.document.focused_block_mut() {
-                        block.typst = Some(cached);
-                    }
-                    let restore_index =
-                        previous_focus.min(self.document.block_count().saturating_sub(1));
-                    let _ = self.document.focus_block(restore_index);
+                if apply_cached_typst_adapter(&mut self.document, &cache_key, cached) > 0 {
                     cx.notify();
                 }
                 continue;
             }
 
-            self.typst_in_flight.insert(index);
+            if !should_start_typst_compile(&self.typst_cache, &self.typst_in_flight, &cache_key) {
+                continue;
+            }
+
+            self.typst_in_flight.insert(cache_key.clone());
             cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let background = cx.background_executor().clone();
                 let mut async_cx = cx.clone();
@@ -1007,8 +1000,9 @@ impl SolaRoot {
                     let next_adapter = typst_adapter_from_result(result);
 
                     let _ = this.update(&mut async_cx, |this, cx| {
-                        this.typst_in_flight.remove(&index);
-                        this.typst_cache.insert(cache_key, next_adapter.clone());
+                        this.typst_in_flight.remove(&cache_key);
+                        this.typst_cache
+                            .insert(cache_key.clone(), next_adapter.clone());
 
                         let Some(current_block) = this.document.blocks().get(index) else {
                             return;
@@ -1018,22 +1012,12 @@ impl SolaRoot {
                             return;
                         }
 
-                        let previous_focus = this.document.focused_block();
-                        if !this.document.focus_block(index) {
-                            return;
-                        }
-
-                        let updated = this
-                            .document
-                            .focused_block_mut()
-                            .map(|block| apply_typst_adapter(block, next_adapter))
-                            .unwrap_or(false);
-
-                        let restore_index =
-                            previous_focus.min(this.document.block_count().saturating_sub(1));
-                        let _ = this.document.focus_block(restore_index);
-
-                        if updated {
+                        if apply_cached_typst_adapter(
+                            &mut this.document,
+                            &cache_key,
+                            next_adapter.clone(),
+                        ) > 0
+                        {
                             cx.notify();
                         }
                     });
@@ -1369,6 +1353,54 @@ fn typst_adapter_from_result(result: Result<String, TypstError>) -> TypstAdapter
     }
 }
 
+fn should_start_typst_compile(
+    cache: &HashMap<String, TypstAdapter>,
+    in_flight: &HashSet<String>,
+    cache_key: &str,
+) -> bool {
+    !cache.contains_key(cache_key) && !in_flight.contains(cache_key)
+}
+
+fn apply_cached_typst_adapter(
+    document: &mut DocumentModel,
+    cache_key: &str,
+    adapter: TypstAdapter,
+) -> usize {
+    let previous_focus = document.focused_block();
+    let mut targets = Vec::new();
+
+    for (index, block) in document.blocks().iter().enumerate() {
+        if !matches!(block.typst, Some(TypstAdapter::Pending)) {
+            continue;
+        }
+
+        let Some((kind, source)) = typst_render_request(block) else {
+            continue;
+        };
+
+        if typst_cache_key(&kind, &source) == cache_key {
+            targets.push(index);
+        }
+    }
+
+    let mut updated = 0;
+    for index in targets {
+        if !document.focus_block(index) {
+            continue;
+        }
+
+        if let Some(block) = document.focused_block_mut()
+            && apply_typst_adapter(block, adapter.clone())
+        {
+            updated += 1;
+        }
+    }
+
+    let restore_index = previous_focus.min(document.block_count().saturating_sub(1));
+    let _ = document.focus_block(restore_index);
+    updated
+}
+
 #[cfg(target_os = "linux")]
 fn ensure_linux_display_backend() -> Result<(), String> {
     if wayland_socket_reachable() || x11_socket_reachable() {
@@ -1426,11 +1458,13 @@ mod tests {
     #[cfg(target_os = "linux")]
     use super::unix_socket_reachable;
     use super::{
-        apply_typst_result, clickable_chars, typst_adapter_from_result, typst_cache_key,
+        apply_cached_typst_adapter, apply_typst_result, clickable_chars,
+        should_start_typst_compile, typst_adapter_from_result, typst_cache_key,
         typst_render_request,
     };
     use sola_document::{DocumentModel, TypstAdapter};
     use sola_typst::{RenderKind, TypstError};
+    use std::collections::{HashMap, HashSet};
     #[cfg(target_os = "linux")]
     use std::path::Path;
 
@@ -1536,6 +1570,61 @@ Hello
         assert!(matches!(
             typst_adapter_from_result(Err(TypstError::Compile("bad typst".to_string()))),
             TypstAdapter::Error { ref message } if message.contains("bad typst")
+        ));
+    }
+
+    #[test]
+    fn should_start_typst_compile_skips_cached_and_inflight_keys() {
+        let key = typst_cache_key(&RenderKind::Math, "x + y");
+        let mut cache = HashMap::new();
+        let mut in_flight = HashSet::new();
+
+        assert!(should_start_typst_compile(&cache, &in_flight, &key));
+
+        cache.insert(
+            key.clone(),
+            TypstAdapter::Rendered {
+                svg: "<svg />".into(),
+            },
+        );
+        assert!(!should_start_typst_compile(&cache, &in_flight, &key));
+
+        cache.clear();
+        in_flight.insert(key.clone());
+        assert!(!should_start_typst_compile(&cache, &in_flight, &key));
+    }
+
+    #[test]
+    fn apply_cached_typst_adapter_updates_all_matching_pending_blocks() {
+        let mut document = DocumentModel::from_markdown(
+            r#"$$a + b$$
+
+$$a + b$$
+
+$$c + d$$"#,
+        );
+
+        let key = typst_cache_key(&RenderKind::Math, "a + b");
+        let updated = apply_cached_typst_adapter(
+            &mut document,
+            &key,
+            TypstAdapter::Rendered {
+                svg: "<svg>stable</svg>".to_string(),
+            },
+        );
+
+        assert_eq!(updated, 2);
+        assert!(matches!(
+            document.blocks()[0].typst,
+            Some(TypstAdapter::Rendered { ref svg }) if svg == "<svg>stable</svg>"
+        ));
+        assert!(matches!(
+            document.blocks()[1].typst,
+            Some(TypstAdapter::Rendered { ref svg }) if svg == "<svg>stable</svg>"
+        ));
+        assert!(matches!(
+            document.blocks()[2].typst,
+            Some(TypstAdapter::Pending)
         ));
     }
 }
