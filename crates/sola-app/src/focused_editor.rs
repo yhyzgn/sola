@@ -86,7 +86,7 @@ pub struct WrappedVisualLine {
 }
 
 #[derive(Clone)]
-struct VisualLineRef {
+pub(crate) struct VisualLineRef {
     global_start: usize,
     global_end: usize,
     wrapped_line_start: usize,
@@ -255,11 +255,10 @@ fn visual_row_for_y(y: Pixels, line_height: Pixels, total_rows: usize) -> Option
 
 #[allow(dead_code)]
 pub fn hit_test_visual_offset(
-    lines: &[WrappedLine],
+    visual_lines: &[VisualLineRef],
     point: Point<Pixels>,
     line_height: Pixels,
 ) -> Option<usize> {
-    let visual_lines = collect_visual_lines(lines);
     let global_row = visual_row_for_y(point.y, line_height, visual_lines.len())?;
     let line = visual_lines
         .iter()
@@ -323,6 +322,7 @@ impl FocusedEditorElement {
 
 pub struct FocusedEditorState {
     lines: Vec<WrappedLine>,
+    visual_lines: Vec<VisualLineRef>,
 }
 
 impl Element for FocusedEditorElement {
@@ -360,7 +360,8 @@ impl Element for FocusedEditorElement {
 
         let layout_id = window.request_layout(style, None, cx);
 
-        (layout_id, FocusedEditorState { lines })
+        let visual_lines = collect_visual_lines(&lines);
+        (layout_id, FocusedEditorState { lines, visual_lines })
     }
 
     fn prepaint(
@@ -385,9 +386,10 @@ impl Element for FocusedEditorElement {
         window: &mut Window,
         cx: &mut App,
         ) {
+            let lines = &request_layout_state.lines;
+            let visual_lines = &request_layout_state.visual_lines;
+            let line_height = self.style.line_height;
 
-        let lines = &request_layout_state.lines;
-        let line_height = self.style.line_height;
 
         let padding = Point {
             x: self.style.padding_x,
@@ -408,7 +410,6 @@ impl Element for FocusedEditorElement {
             let start = anchor.min(cursor.head);
             let end = anchor.max(cursor.head);
 
-            let visual_lines = collect_visual_lines(lines);
             for visual_line in visual_lines {
                 let overlap_start = start.max(visual_line.global_start);
                 let overlap_end = end.min(visual_line.global_end);
@@ -455,7 +456,6 @@ impl Element for FocusedEditorElement {
         if let Some(cursor) = &self.cursor
             && self.cursor_visible
         {
-            let visual_lines = collect_visual_lines(lines);
             if let Some(visual_line_idx) = find_visual_line_ref(&visual_lines, cursor.head) {
                 let visual_line = &visual_lines[visual_line_idx];
                 let local_offset =
@@ -480,25 +480,21 @@ impl Element for FocusedEditorElement {
         if let Some(on_cursor_move) = &self.on_cursor_move {
             let on_cursor_move = on_cursor_move.clone();
             let line_height = self.style.line_height;
-            let lines = lines.clone();
+            let visual_lines = visual_lines.clone();
 
             // Mouse Down: Set anchor and head
             let on_cursor_move_down = on_cursor_move.clone();
-            let lines_down = lines.clone();
+            let visual_lines_down = visual_lines.clone();
             window.on_mouse_event(
                 move |event: &MouseDownEvent, phase: DispatchPhase, window, cx| {
                     if phase == DispatchPhase::Bubble && bounds.contains(&event.position) {
                         let local_point = event.position - text_bounds.origin;
                         if let Some(offset) =
-                            hit_test_visual_offset(&lines_down, local_point, line_height)
+                            hit_test_visual_offset(&visual_lines_down, local_point, line_height)
                         {
                             on_cursor_move_down(offset, event.modifiers.shift, window, cx);
                         } else {
-                            let end = lines_down
-                                .iter()
-                                .map(|l| l.text.len() + 1)
-                                .sum::<usize>()
-                                .saturating_sub(1);
+                            let end = visual_lines_down.last().map_or(0, |l| l.global_end);
                             on_cursor_move_down(end, event.modifiers.shift, window, cx);
                         }
                     }
@@ -507,24 +503,20 @@ impl Element for FocusedEditorElement {
 
             // Mouse Move (Drag): Update head only
             let on_cursor_move_drag = on_cursor_move.clone();
-            let lines_drag = lines.clone();
+            let visual_lines_drag = visual_lines.clone();
             window.on_mouse_event(
                 move |event: &MouseMoveEvent, phase: DispatchPhase, window, cx| {
                     if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left)
                     {
                         let local_point = event.position - text_bounds.origin;
                         if let Some(offset) =
-                            hit_test_visual_offset(&lines_drag, local_point, line_height)
+                            hit_test_visual_offset(&visual_lines_drag, local_point, line_height)
                         {
                             on_cursor_move_drag(offset, true, window, cx);
                         } else if local_point.y < Pixels::ZERO {
                             on_cursor_move_drag(0, true, window, cx);
                         } else {
-                            let end = lines_drag
-                                .iter()
-                                .map(|l| l.text.len() + 1)
-                                .sum::<usize>()
-                                .saturating_sub(1);
+                            let end = visual_lines_drag.last().map_or(0, |l| l.global_end);
                             on_cursor_move_drag(end, true, window, cx);
                         }
                     }

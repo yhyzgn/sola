@@ -475,4 +475,10 @@
    - **支持拖拽选区**：在 Element 内部注册 `MouseMove` 监听，实现了通过鼠标拖拽扩展选区的交互，完全对齐 Zed 体验。
    - **精确点击命中**：利用 Element 的 `bounds` 和 `padding` 自动换算局部坐标，彻底解决了跨块点击定位不准的问题。
    - **架构解耦**：通过 `this_handle (WeakEntity)` 模式，使 Element 的点击事件能安全地回调到 `SolaRoot` 更新文档状态。
-   - 验证通过：`cargo test` 全量通过，运行态下支持平滑的鼠标选区操作。
+   - 验证通过：`cargo test`全量通过，运行态下支持平滑的鼠标选区操作。
+   4. **落地 FocusedEditorElement 重构第三阶段（性能优化与打磨）**：
+   - **引入 Layout 缓存**：在 `FocusedEditorState` 中引入 `visual_lines` 预计算缓存，消除了 `paint` 阶段重复的视觉行换算开销。
+   - **重构命中算法**：`hit_test_visual_offset` 现在直接操作缓存的视觉行引用，大幅提升了在大段文本下的响应速度。
+   - **代码质量提升**：清理了 `shell.rs` 和 `focused_editor.rs` 中的冗余导入与未使用代码，修正了 Visibility 警告。
+   - 验证通过：编译、测试、运行全链路绿色。
+
