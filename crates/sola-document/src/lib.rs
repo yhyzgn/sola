@@ -510,8 +510,9 @@ impl DocumentModel {
 
         let insert_at = self.focused_block + 1;
         self.push_undo_snapshot();
-        self.blocks
-            .insert(insert_at, new_block(insert_at, block.kind, block.source));
+        let mut duplicated = new_block(insert_at, block.kind, block.source);
+        duplicated.typst = block.typst;
+        self.blocks.insert(insert_at, duplicated);
         self.focused_block = insert_at;
         self.rebuild_metadata();
         true
@@ -1679,6 +1680,34 @@ Plain paragraph without math."#,
         assert!(document.insert_paragraph_after_focused("tail paragraph"));
         assert!(matches!(
             document.blocks()[0].typst,
+            Some(TypstAdapter::Error { ref message }) if message == "bad typst"
+        ));
+    }
+
+    #[test]
+    fn duplicate_focused_block_preserves_rendered_typst_state() {
+        let mut document = DocumentModel::from_markdown("$$a + b$$");
+        document.focused_block_mut().unwrap().typst = Some(TypstAdapter::Rendered {
+            svg: "<svg>stable</svg>".to_string(),
+        });
+
+        assert!(document.duplicate_focused_block());
+        assert!(matches!(
+            document.blocks()[1].typst,
+            Some(TypstAdapter::Rendered { ref svg }) if svg == "<svg>stable</svg>"
+        ));
+    }
+
+    #[test]
+    fn duplicate_focused_block_preserves_error_typst_state() {
+        let mut document = DocumentModel::from_markdown("Paragraph with $a + b$ inline math.");
+        document.focused_block_mut().unwrap().typst = Some(TypstAdapter::Error {
+            message: "bad typst".to_string(),
+        });
+
+        assert!(document.duplicate_focused_block());
+        assert!(matches!(
+            document.blocks()[1].typst,
             Some(TypstAdapter::Error { ref message }) if message == "bad typst"
         ));
     }

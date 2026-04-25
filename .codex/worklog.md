@@ -265,3 +265,12 @@
     - `cargo test -p sola-document`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+55. 完成 Typst duplicate 链路优化：
+    - `duplicate_focused_block` 现在会复制原 block 的 `typst` 状态。
+    - 对已渲染和已报错两种状态分别补充了 TDD 回归测试。
+    - 这样复制公式 / Typst / inline-math block 时可以直接复用已有结果，避免立刻进入新的后台编译。
+56. Typst duplicate 链路阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-document`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
