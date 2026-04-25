@@ -8,6 +8,8 @@ path = "src/lib.rs"
 
 [dependencies]
 gpui.workspace = true
+ignore = "0.4.25"
+notify = "8.2.0"
 sola-core = { path = "../sola-core" }
 sola-document = { path = "../sola-document" }
 sola-theme = { path = "../sola-theme" }

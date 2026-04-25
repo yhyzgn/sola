@@ -3,9 +3,11 @@ use crate::focused_editor::{
     move_cursor_vertical_visual, shape_focused_lines, spans_to_runs, visual_line_edge_offset,
     visual_line_ranges,
 };
+use crate::worktree::Worktree;
+use crate::workspace::Workspace;
 use gpui::{
-    AppContext, Application, AsyncApp, Bounds, Context, Div, FocusHandle, FontWeight, Hsla, Image,
-    ImageFormat, InteractiveElement, IntoElement, ParentElement, Render,
+    App, AppContext, Application, AsyncApp, Bounds, Context, Div, Entity, FocusHandle, FontWeight,
+    Hsla, Image, ImageFormat, InteractiveElement, IntoElement, ParentElement, Render,
     StatefulInteractiveElement, Styled, WeakEntity, Window, WindowBounds, WindowOptions, div, img,
     px, rgb, size,
 };
@@ -62,20 +64,12 @@ pub fn run() {
 struct SolaRoot {
     focus_handle: FocusHandle,
     this_handle: Option<WeakEntity<Self>>,
-    theme_mode: ThemeMode,
-    theme: Theme,
-    document: DocumentModel,
+    workspace: Entity<Workspace>,
     highlighter: SyntaxHighlighter,
     typst_cache: HashMap<String, TypstAdapter>,
     typst_in_flight: HashSet<String>,
     cursor_visible: bool,
     cursor_blink_started: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ThemeMode {
-    Dark,
-    Light,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,12 +81,18 @@ struct BlockClickPlan {
 
 impl SolaRoot {
     fn new(cx: &mut Context<Self>) -> Self {
+        let worktree = Worktree::local(".", cx);
+        let workspace = cx.new(|cx| Workspace::new(worktree, cx));
+
+        // Sync initial document with sample markdown
+        workspace.update(cx, |this, _| {
+            *this.document_mut() = DocumentModel::from_markdown(sample_markdown());
+        });
+
         Self {
             focus_handle: cx.focus_handle(),
             this_handle: None,
-            theme_mode: ThemeMode::Dark,
-            theme: Theme::sola_dark(),
-            document: DocumentModel::from_markdown(sample_markdown()),
+            workspace,
             highlighter: SyntaxHighlighter::new_rust(),
             typst_cache: HashMap::new(),
             typst_in_flight: HashSet::new(),
@@ -101,16 +101,10 @@ impl SolaRoot {
         }
     }
 
-    fn sync_theme(&mut self) {
-        self.theme = match self.theme_mode {
-            ThemeMode::Dark => Theme::sola_dark(),
-            ThemeMode::Light => Theme::sola_light(),
-        };
-    }
-
-    fn toggle_theme(&mut self) {
-        self.theme_mode = self.theme_mode.toggle();
-        self.sync_theme();
+    fn toggle_theme(&mut self, cx: &mut Context<Self>) {
+        self.workspace.update(cx, |workspace, cx| {
+            workspace.toggle_theme(cx);
+        });
     }
 
     fn ensure_cursor_blink_loop(&mut self, cx: &mut Context<Self>) {
@@ -142,15 +136,16 @@ impl SolaRoot {
     }
 
     fn render_header(&self, cx: &mut Context<Self>) -> Div {
+        let workspace = self.workspace.read(cx);
+        let theme = workspace.theme();
         let toggle_theme = action_button(
-            format!("theme: {}", self.theme_mode.label()),
-            &self.theme,
+            format!("theme: {}", workspace.theme_mode().label()),
+            theme,
             true,
         )
         .id("toggle-theme")
         .on_click(cx.listener(|this, _event, _window, cx| {
-            this.toggle_theme();
-            cx.notify();
+            this.toggle_theme(cx);
         }));
 
         div()
@@ -159,7 +154,7 @@ impl SolaRoot {
             .items_center()
             .p(px(20.0))
             .border_b_1()
-            .border_color(rgb_hex(&self.theme.palette.panel_border))
+            .border_color(rgb_hex(&theme.palette.panel_border))
             .child(
                 div()
                     .flex()
@@ -167,14 +162,14 @@ impl SolaRoot {
                     .gap(px(4.0))
                     .child(
                         div()
-                            .text_size(px(self.theme.typography.title_size as f32))
+                            .text_size(px(theme.typography.title_size as f32))
                             .font_weight(FontWeight::BOLD)
                             .child(APP_NAME),
                     )
                     .child(
                         div()
                             .text_size(px(14.0))
-                            .text_color(rgb_hex(&self.theme.palette.text_muted))
+                            .text_color(rgb_hex(&theme.palette.text_muted))
                             .child(APP_TAGLINE),
                     ),
             )
@@ -183,28 +178,32 @@ impl SolaRoot {
                     .flex()
                     .gap(px(12.0))
                     .child(toggle_theme)
-                    .child(pill("workspace", format!("{} crates", 4), &self.theme))
+                    .child(pill("workspace", format!("{} crates", 4), theme))
                     .child(pill(
                         "focused block",
-                        format!("#{}", self.document.focused_block() + 1),
-                        &self.theme,
+                        format!("#{}", workspace.document().focused_block() + 1),
+                        theme,
                     ))
-                    .child(pill("roadmap", "phase 1 / 2".to_string(), &self.theme)),
+                    .child(pill("roadmap", "phase 1 / 2 / 5".to_string(), theme)),
             )
     }
 
-    fn render_sidebar(&self) -> Div {
-        let outline = self.document.outline().iter().fold(
+    fn render_sidebar(&self, cx: &mut App) -> Div {
+        let workspace = self.workspace.read(cx);
+        let theme = workspace.theme();
+        let document = workspace.document();
+
+        let outline = document.outline().iter().fold(
             div()
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(section_title("Document outline", &self.theme)),
+                .child(section_title("Document outline", theme)),
             |sidebar, entry| {
                 sidebar.child(
                     div()
                         .text_size(px(13.0))
-                        .text_color(rgb_hex(&self.theme.palette.text_muted))
+                        .text_color(rgb_hex(&theme.palette.text_muted))
                         .pl(px((entry.level.saturating_sub(1) as f32) * 14.0))
                         .child(format!("H{} · {}", entry.level, entry.title)),
                 )
@@ -216,12 +215,12 @@ impl SolaRoot {
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(section_title("Roadmap", &self.theme)),
+                .child(section_title("Roadmap", theme)),
             |sidebar, phase| {
                 sidebar.child(
                     div()
                         .text_size(px(13.0))
-                        .text_color(rgb_hex(&self.theme.palette.text_muted))
+                        .text_color(rgb_hex(&theme.palette.text_muted))
                         .child(*phase),
                 )
             },
@@ -234,142 +233,183 @@ impl SolaRoot {
             .flex_col()
             .gap(px(18.0))
             .p(px(18.0))
-            .bg(rgb_hex(&self.theme.palette.panel_background))
+            .bg(rgb_hex(&theme.palette.panel_background))
             .border_r_1()
-            .border_color(rgb_hex(&self.theme.palette.panel_border))
-            .child(self.render_stats_card())
+            .border_color(rgb_hex(&theme.palette.panel_border))
+            .child(self.render_stats_card(cx))
             .child(outline)
             .child(roadmap)
     }
 
-    fn render_stats_card(&self) -> Div {
-        let stats = self.document.stats();
+    fn render_stats_card(&self, cx: &mut App) -> Div {
+        let workspace = self.workspace.read(cx);
+        let theme = workspace.theme();
+        let stats = workspace.document().stats();
 
         div()
             .flex()
             .flex_col()
             .gap(px(8.0))
             .p(px(16.0))
-            .bg(rgb_hex(&self.theme.palette.app_background))
+            .bg(rgb_hex(&theme.palette.app_background))
             .rounded(px(12.0))
             .border_1()
-            .border_color(rgb_hex(&self.theme.palette.panel_border))
-            .child(section_title("Prototype status", &self.theme))
+            .border_color(rgb_hex(&theme.palette.panel_border))
+            .child(section_title("Prototype status", theme))
             .child(meta_line(
                 "blocks",
-                self.document.blocks().len().to_string(),
-                &self.theme,
+                workspace.document().blocks().len().to_string(),
+                theme,
             ))
             .child(meta_line(
                 "headings",
                 stats.headings.to_string(),
-                &self.theme,
+                theme,
             ))
             .child(meta_line(
                 "paragraphs",
                 stats.paragraphs.to_string(),
-                &self.theme,
+                theme,
             ))
             .child(meta_line(
                 "lists",
                 stats.list_items.to_string(),
-                &self.theme,
+                theme,
             ))
-            .child(meta_line("quotes", stats.quotes.to_string(), &self.theme))
+            .child(meta_line("quotes", stats.quotes.to_string(), theme))
             .child(meta_line(
                 "code",
                 stats.code_blocks.to_string(),
-                &self.theme,
+                theme,
             ))
     }
 
     fn render_document_surface(&mut self, cx: &mut Context<Self>) -> Div {
+        let (theme, document) = {
+            let workspace = self.workspace.read(cx);
+            (workspace.theme().clone(), workspace.document().clone())
+        };
+
         self.ensure_cursor_blink_loop(cx);
         self.trigger_typst_renders(cx);
-        let blocks = self.document.blocks().iter().enumerate().fold(
+        let blocks = document.blocks().iter().enumerate().fold(
             div().flex().flex_col().gap(px(14.0)).p(px(24.0)),
             |surface, (index, block)| surface.child(self.render_block(index, block, cx)),
         );
 
-        let previous_button = action_button(
-            "← previous block".to_string(),
-            &self.theme,
-            self.document.focused_block() > 0,
-        )
-        .id("previous-block")
-        .on_click(cx.listener(|this, _event, _window, cx| {
-            if this.document.focus_previous() {
-                cx.notify();
-            }
-        }));
+        let previous_button = {
+            let workspace = self.workspace.clone();
+            action_button(
+                "← previous block".to_string(),
+                &theme,
+                document.focused_block() > 0,
+            )
+            .id("previous-block")
+            .on_click(cx.listener(move |_this, _event, _window, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    if workspace.document_mut().focus_previous() {
+                        cx.notify();
+                    }
+                });
+            }))
+        };
 
-        let next_button = action_button(
-            "next block →".to_string(),
-            &self.theme,
-            self.document.focused_block() + 1 < self.document.block_count(),
-        )
-        .id("next-block")
-        .on_click(cx.listener(|this, _event, _window, cx| {
-            if this.document.focus_next() {
-                cx.notify();
-            }
-        }));
+        let next_button = {
+            let workspace = self.workspace.clone();
+            action_button(
+                "next block →".to_string(),
+                &theme,
+                document.focused_block() + 1 < document.block_count(),
+            )
+            .id("next-block")
+            .on_click(cx.listener(move |_this, _event, _window, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    if workspace.document_mut().focus_next() {
+                        cx.notify();
+                    }
+                });
+            }))
+        };
 
-        let focused_summary = self
-            .document
+        let focused_summary = document
             .focused_block_ref()
             .map(|block| block.rendered.clone())
             .unwrap_or_else(|| "no focused block".to_string());
-        let draft_label = if self.document.focused_has_draft() {
+        let draft_label = if document.focused_has_draft() {
             "draft pending"
         } else {
             "source synced"
         };
-        let insert_button = action_button("insert paragraph".to_string(), &self.theme, true)
-            .id("insert-paragraph")
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                if this.document.insert_paragraph_after_focused(
-                    "A new paragraph block inserted by the structure editing prototype.",
-                ) {
-                    cx.notify();
-                }
-            }));
+        let insert_button = {
+            let workspace = self.workspace.clone();
+            action_button("insert paragraph".to_string(), &theme, true)
+                .id("insert-paragraph")
+                .on_click(cx.listener(move |_this, _event, _window, cx| {
+                    workspace.update(cx, |workspace, cx| {
+                        if workspace.document_mut().insert_paragraph_after_focused(
+                            "A new paragraph block inserted by the structure editing prototype.",
+                        ) {
+                            cx.notify();
+                        }
+                    });
+                }))
+        };
 
-        let duplicate_button = action_button("duplicate block".to_string(), &self.theme, true)
-            .id("duplicate-block")
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                if this.document.duplicate_focused_block() {
-                    cx.notify();
-                }
-            }));
+        let duplicate_button = {
+            let workspace = self.workspace.clone();
+            action_button("duplicate block".to_string(), &theme, true)
+                .id("duplicate-block")
+                .on_click(cx.listener(move |_this, _event, _window, cx| {
+                    workspace.update(cx, |workspace, cx| {
+                        if workspace.document_mut().duplicate_focused_block() {
+                            cx.notify();
+                        }
+                    });
+                }))
+        };
 
-        let delete_button = action_button(
-            "delete block".to_string(),
-            &self.theme,
-            self.document.block_count() > 1,
-        )
-        .id("delete-block")
-        .on_click(cx.listener(|this, _event, _window, cx| {
-            if this.document.delete_focused_block() {
-                cx.notify();
-            }
-        }));
+        let delete_button = {
+            let workspace = self.workspace.clone();
+            action_button(
+                "delete block".to_string(),
+                &theme,
+                document.block_count() > 1,
+            )
+            .id("delete-block")
+            .on_click(cx.listener(move |_this, _event, _window, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    if workspace.document_mut().delete_focused_block() {
+                        cx.notify();
+                    }
+                });
+            }))
+        };
 
-        let undo_button = action_button("undo".to_string(), &self.theme, self.document.can_undo())
-            .id("undo")
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                if this.document.undo() {
-                    cx.notify();
-                }
-            }));
+        let undo_button = {
+            let workspace = self.workspace.clone();
+            action_button("undo".to_string(), &theme, document.can_undo())
+                .id("undo")
+                .on_click(cx.listener(move |_this, _event, _window, cx| {
+                    workspace.update(cx, |workspace, cx| {
+                        if workspace.document_mut().undo() {
+                            cx.notify();
+                        }
+                    });
+                }))
+        };
 
-        let redo_button = action_button("redo".to_string(), &self.theme, self.document.can_redo())
-            .id("redo")
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                if this.document.redo() {
-                    cx.notify();
-                }
-            }));
+        let redo_button = {
+            let workspace = self.workspace.clone();
+            action_button("redo".to_string(), &theme, document.can_redo())
+                .id("redo")
+                .on_click(cx.listener(move |_this, _event, _window, cx| {
+                    workspace.update(cx, |workspace, cx| {
+                        if workspace.document_mut().redo() {
+                            cx.notify();
+                        }
+                    });
+                }))
+        };
 
         div()
             .flex()
@@ -379,7 +419,7 @@ impl SolaRoot {
             .min_h_0()
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event, window, cx| {
-                if this.handle_focused_key_down(event, window) {
+                if this.handle_focused_key_down(event, window, cx) {
                     cx.notify();
                 }
             }))
@@ -387,7 +427,7 @@ impl SolaRoot {
                 div()
                     .p(px(24.0))
                     .border_b_1()
-                    .border_color(rgb_hex(&self.theme.palette.panel_border))
+                    .border_color(rgb_hex(&theme.palette.panel_border))
                     .child(
                         div()
                             .flex()
@@ -395,12 +435,12 @@ impl SolaRoot {
                             .gap(px(8.0))
                             .child(section_title(
                                 "Dual-state engine prototype",
-                                &self.theme,
+                                &theme,
                             ))
                             .child(
                                 div()
                                     .text_size(px(14.0))
-                                    .text_color(rgb_hex(&self.theme.palette.text_muted))
+                                    .text_color(rgb_hex(&theme.palette.text_muted))
                                     .child("Blurred blocks render their formatted summary; the focused block expands into raw Markdown source. Click another block to move focus."),
                             )
                             .child(
@@ -415,7 +455,7 @@ impl SolaRoot {
                                     .child(pill(
                                         "block summary",
                                         truncate_for_pill(&focused_summary, 40),
-                                        &self.theme,
+                                        &theme,
                                     )),
                             )
                             .child(
@@ -430,9 +470,9 @@ impl SolaRoot {
                             .child(pill(
                                 "source state",
                                 draft_label.to_string(),
-                                &self.theme,
+                                &theme,
                             ))
-                            .child(shortcut_legend(&self.theme)),
+                            .child(shortcut_legend(&theme)),
                     ),
             )
             .child(
@@ -451,7 +491,10 @@ impl SolaRoot {
         block: &DocumentBlock,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let is_focused = self.document.focused_block() == index;
+        let workspace = self.workspace.read(cx);
+        let theme = workspace.theme();
+        let document = workspace.document();
+        let is_focused = document.focused_block() == index;
 
         let block_container = div()
             .id(("block-container", index))
@@ -465,42 +508,44 @@ impl SolaRoot {
         let indicator = if is_focused {
             div()
                 .w(px(2.0))
-                .bg(rgb_hex(&self.theme.palette.accent))
+                .bg(rgb_hex(&theme.palette.accent))
                 .rounded_full()
         } else {
             div().w(px(2.0))
         };
 
         let content = if is_focused {
-            let editor_style = FocusedEditorStyle::from_theme(&self.theme);
-            let text = self.document.focused_text().unwrap_or(&block.source).to_string();
+            let editor_style = FocusedEditorStyle::from_theme(theme);
+            let text = document.focused_text().unwrap_or(&block.source).to_string();
             let spans = self.highlighter.highlight(&text);
-            let runs = spans_to_runs(&spans, &editor_style, &self.theme);
-            let selection_color = rgb_hex(&self.theme.palette.selection);
-            let cursor_color = rgb_hex(&self.theme.palette.cursor);
+            let runs = spans_to_runs(&spans, &editor_style, theme);
+            let selection_color = rgb_hex(&theme.palette.selection);
+            let cursor_color = rgb_hex(&theme.palette.cursor);
 
             if let Some(this_handle) = self.this_handle.clone() {
                 div().flex_1().child(
                     div()
-                        .bg(rgb_hex(&self.theme.palette.code_background))
+                        .bg(rgb_hex(&theme.palette.code_background))
                         .rounded(px(8.0))
                         .child(
                             FocusedEditorElement::new(
                                 text,
                                 editor_style,
                                 runs,
-                                self.document.focused_cursor().cloned(),
+                                document.focused_cursor().cloned(),
                                 self.cursor_visible,
                                 selection_color,
                                 cursor_color,
                             )
                             .on_cursor_move(move |offset, shift, window, cx| {
                                 let _ = this_handle.update(cx, |this, cx| {
-                                    window.focus(&this.focus_handle);
-                                    this.cursor_visible = true;
-                                    if this.document.set_focused_cursor(offset, shift) {
-                                        cx.notify();
-                                    }
+                                    this.workspace.update(cx, |workspace, cx| {
+                                        window.focus(&this.focus_handle);
+                                        this.cursor_visible = true;
+                                        if workspace.document_mut().set_focused_cursor(offset, shift) {
+                                            cx.notify();
+                                        }
+                                    });
                                 });
                             }),
                         ),
@@ -509,34 +554,42 @@ impl SolaRoot {
                 div().flex_1()
             }
         } else {
-            div().flex_1().child(self.render_blurred_content(block))
+            div().flex_1().child(self.render_blurred_content(block, theme))
         };
 
         block_container
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _event, window, cx| {
+                    this.workspace.update(cx, |workspace, cx| {
+                        let document = workspace.document_mut();
+                        let plan = plan_block_click(
+                            document.focused_block(),
+                            index,
+                            document.focused_has_draft(),
+                        );
+
+                        if plan.apply_draft {
+                            document.apply_focused_draft();
+                        }
+
+                        if plan.switch_block_focus {
+                            document.focus_block(index);
+                        }
+
+                        if plan.refresh_window_focus {
+                            window.focus(&this.focus_handle);
+                        }
+
+                        cx.notify();
+                    });
+                }),
+            )
             .child(indicator)
             .child(content)
-            .on_click(cx.listener(move |this, _event, window, cx| {
-                let plan = plan_block_click(
-                    this.document.focused_block(),
-                    index,
-                    this.document.focused_has_draft(),
-                );
-
-                if plan.refresh_window_focus {
-                    window.focus(&this.focus_handle);
-                }
-
-                if plan.apply_draft {
-                    this.document.apply_focused_draft();
-                }
-
-                if plan.switch_block_focus && this.document.focus_block(index) {
-                    cx.notify();
-                }
-            }))
     }
 
-    fn render_blurred_content(&self, block: &DocumentBlock) -> Div {
+    fn render_blurred_content(&self, block: &DocumentBlock, theme: &Theme) -> Div {
         match &block.kind {
             BlockKind::Heading { level } => div()
                 .flex()
@@ -545,7 +598,7 @@ impl SolaRoot {
                 .child(
                     div()
                         .text_size(px(12.0))
-                        .text_color(rgb_hex(&self.theme.palette.accent))
+                        .text_color(rgb_hex(&theme.palette.accent))
                         .child(format!("Heading level {}", level)),
                 )
                 .child(
@@ -561,12 +614,13 @@ impl SolaRoot {
                 ),
             BlockKind::Paragraph => {
                 if block.typst.is_some() {
-                    self.render_typst_preview(block, "Paragraph")
+                    self.render_typst_preview(block, "Paragraph", theme)
                 } else {
                     self.render_textual_block(
                         block,
-                        self.theme.typography.body_size as f32,
-                        &self.theme.palette.text_primary,
+                        theme.typography.body_size as f32,
+                        &theme.palette.text_primary,
+                        theme,
                     )
                 }
             }
@@ -575,36 +629,38 @@ impl SolaRoot {
                 .gap(px(10.0))
                 .child(
                     div()
-                        .text_color(rgb_hex(&self.theme.palette.accent))
+                        .text_color(rgb_hex(&theme.palette.accent))
                         .font_weight(FontWeight::BOLD)
                         .child(if *ordered { "1." } else { "•" }),
                 )
                 .child(if block.typst.is_some() {
-                    self.render_typst_preview(block, "List item")
+                    self.render_typst_preview(block, "List item", theme)
                 } else {
                     self.render_textual_block(
                         block,
-                        self.theme.typography.body_size as f32,
-                        &self.theme.palette.text_primary,
+                        theme.typography.body_size as f32,
+                        &theme.palette.text_primary,
+                        theme,
                     )
                 }),
             BlockKind::Quote => div()
                 .pl(px(14.0))
                 .border_l_2()
-                .border_color(rgb_hex(&self.theme.palette.accent))
+                .border_color(rgb_hex(&theme.palette.accent))
                 .child(if block.typst.is_some() {
-                    self.render_typst_preview(block, "Quote")
+                    self.render_typst_preview(block, "Quote", theme)
                 } else {
                     self.render_textual_block(
                         block,
-                        self.theme.typography.body_size as f32,
-                        &self.theme.palette.text_muted,
+                        theme.typography.body_size as f32,
+                        &theme.palette.text_muted,
+                        theme,
                     )
                 }),
             BlockKind::CodeFence { language } => {
-                let editor_style = FocusedEditorStyle::from_theme(&self.theme);
+                let editor_style = FocusedEditorStyle::from_theme(theme);
                 let spans = self.highlighter.highlight(&block.rendered);
-                let runs = spans_to_runs(&spans, &editor_style, &self.theme);
+                let runs = spans_to_runs(&spans, &editor_style, theme);
 
                 div()
                     .flex()
@@ -613,7 +669,7 @@ impl SolaRoot {
                     .child(
                         div()
                             .text_size(px(12.0))
-                            .text_color(rgb_hex(&self.theme.palette.text_muted))
+                            .text_color(rgb_hex(&theme.palette.text_muted))
                             .child(format!(
                                 "Code fence{}",
                                 language
@@ -626,7 +682,7 @@ impl SolaRoot {
                         div()
                             .id(("code-block-scroll", block.id))
                             .p(px(14.0))
-                            .bg(rgb_hex(&self.theme.palette.code_background))
+                            .bg(rgb_hex(&theme.palette.code_background))
                             .rounded(px(10.0))
                             .overflow_x_scroll()
                             .child(FocusedEditorElement::new(
@@ -635,17 +691,17 @@ impl SolaRoot {
                                 runs,
                                 None,
                                 false,
-                                rgb_hex(&self.theme.palette.selection),
-                                rgb_hex(&self.theme.palette.cursor),
+                                rgb_hex(&theme.palette.selection),
+                                rgb_hex(&theme.palette.cursor),
                             )),
                     )
             }
-            BlockKind::MathBlock => self.render_typst_preview(block, "Math block"),
-            BlockKind::TypstBlock => self.render_typst_preview(block, "Typst block"),
+            BlockKind::MathBlock => self.render_typst_preview(block, "Math block", theme),
+            BlockKind::TypstBlock => self.render_typst_preview(block, "Typst block", theme),
         }
     }
 
-    fn render_typst_preview(&self, block: &DocumentBlock, label: &str) -> Div {
+    fn render_typst_preview(&self, block: &DocumentBlock, label: &str, theme: &Theme) -> Div {
         let preview_height = match block.kind {
             BlockKind::MathBlock | BlockKind::TypstBlock => 160.0,
             BlockKind::Heading { .. }
@@ -663,16 +719,16 @@ impl SolaRoot {
                 .child(
                     div()
                         .text_size(px(12.0))
-                        .text_color(rgb_hex(&self.theme.palette.text_muted))
+                        .text_color(rgb_hex(&theme.palette.text_muted))
                         .child(format!("{label} · rendering")),
                 )
                 .child(
                     div()
                         .p(px(14.0))
-                        .bg(rgb_hex(&self.theme.palette.code_background))
+                        .bg(rgb_hex(&theme.palette.code_background))
                         .rounded(px(10.0))
                         .text_size(px(13.0))
-                        .text_color(rgb_hex(&self.theme.palette.text_muted))
+                        .text_color(rgb_hex(&theme.palette.text_muted))
                         .child("Rendering Typst preview..."),
                 ),
             Some(TypstAdapter::Rendered { svg }) => div()
@@ -682,16 +738,16 @@ impl SolaRoot {
                 .child(
                     div()
                         .text_size(px(12.0))
-                        .text_color(rgb_hex(&self.theme.palette.text_muted))
+                        .text_color(rgb_hex(&theme.palette.text_muted))
                         .child(format!("{label} · rendered")),
                 )
                 .child(
                     div()
                         .p(px(14.0))
-                        .bg(rgb_hex(&self.theme.palette.code_background))
+                        .bg(rgb_hex(&theme.palette.code_background))
                         .rounded(px(10.0))
                         .border_1()
-                        .border_color(rgb_hex(&self.theme.palette.panel_border))
+                        .border_color(rgb_hex(&theme.palette.panel_border))
                         .child(
                             img(Arc::new(Image::from_bytes(
                                 ImageFormat::Svg,
@@ -708,16 +764,16 @@ impl SolaRoot {
                 .child(
                     div()
                         .text_size(px(12.0))
-                        .text_color(rgb_hex(&self.theme.palette.text_muted))
+                        .text_color(rgb_hex(&theme.palette.text_muted))
                         .child(format!("{label} · error")),
                 )
                 .child(
                     div()
                         .p(px(14.0))
-                        .bg(rgb_hex(&self.theme.palette.code_background))
+                        .bg(rgb_hex(&theme.palette.code_background))
                         .rounded(px(10.0))
                         .border_1()
-                        .border_color(rgb_hex(&self.theme.palette.panel_border))
+                        .border_color(rgb_hex(&theme.palette.panel_border))
                         .child(
                             div()
                                 .text_size(px(13.0))
@@ -728,21 +784,21 @@ impl SolaRoot {
                             div()
                                 .mt(px(10.0))
                                 .text_size(px(12.0))
-                                .text_color(rgb_hex(&self.theme.palette.text_muted))
+                                .text_color(rgb_hex(&theme.palette.text_muted))
                                 .child(block.rendered.clone()),
                         ),
                 ),
             None => div()
-                .text_size(px(self.theme.typography.body_size as f32))
-                .text_color(rgb_hex(&self.theme.palette.text_primary))
+                .text_size(px(theme.typography.body_size as f32))
+                .text_color(rgb_hex(&theme.palette.text_primary))
                 .child(block.rendered.clone()),
         }
     }
 
-    fn render_textual_block(&self, block: &DocumentBlock, default_size: f32, color: &str) -> Div {
+    fn render_textual_block(&self, block: &DocumentBlock, default_size: f32, color: &str, theme: &Theme) -> Div {
         match &block.html {
             Some(HtmlAdapter::Adapted { nodes }) => {
-                self.render_html_nodes(nodes, default_size, color)
+                self.render_html_nodes(nodes, default_size, color, theme)
             }
             Some(HtmlAdapter::Unsupported { raw }) => div()
                 .flex()
@@ -751,15 +807,15 @@ impl SolaRoot {
                 .child(pill(
                     "html adapter",
                     "degraded unsupported html".to_string(),
-                    &self.theme,
+                    theme,
                 ))
                 .child(
                     div()
                         .p(px(14.0))
-                        .bg(rgb_hex(&self.theme.palette.code_background))
+                        .bg(rgb_hex(&theme.palette.code_background))
                         .rounded(px(10.0))
                         .text_size(px(13.0))
-                        .text_color(rgb_hex(&self.theme.palette.text_muted))
+                        .text_color(rgb_hex(&theme.palette.text_muted))
                         .child(raw.clone()),
                 ),
             None => div()
@@ -769,7 +825,7 @@ impl SolaRoot {
         }
     }
 
-    fn render_html_nodes(&self, nodes: &[HtmlNode], default_size: f32, default_color: &str) -> Div {
+    fn render_html_nodes(&self, nodes: &[HtmlNode], default_size: f32, default_color: &str, theme: &Theme) -> Div {
         nodes.iter().fold(
             div().flex().flex_wrap().items_start().gap(px(0.0)),
             |content, node| match node {
@@ -804,15 +860,15 @@ impl SolaRoot {
                         .gap(px(8.0))
                         .px(px(12.0))
                         .py(px(10.0))
-                        .bg(rgb_hex(&self.theme.palette.code_background))
+                        .bg(rgb_hex(&theme.palette.code_background))
                         .rounded(px(10.0))
                         .border_1()
-                        .border_color(rgb_hex(&self.theme.palette.panel_border))
+                        .border_color(rgb_hex(&theme.palette.panel_border))
                         .child(
                             div()
                                 .text_size(px(12.0))
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(rgb_hex(&self.theme.palette.accent))
+                                .text_color(rgb_hex(&theme.palette.accent))
                                 .child("IMG"),
                         )
                         .child(
@@ -823,7 +879,7 @@ impl SolaRoot {
                                 .child(
                                     div()
                                         .text_size(px(13.0))
-                                        .text_color(rgb_hex(&self.theme.palette.text_primary))
+                                        .text_color(rgb_hex(&theme.palette.text_primary))
                                         .child(
                                             image
                                                 .alt
@@ -835,7 +891,7 @@ impl SolaRoot {
                                 .child(
                                     div()
                                         .text_size(px(12.0))
-                                        .text_color(rgb_hex(&self.theme.palette.text_muted))
+                                        .text_color(rgb_hex(&theme.palette.text_muted))
                                         .child(format!(
                                             "{}{}",
                                             image
@@ -858,28 +914,32 @@ impl SolaRoot {
 
 impl SolaRoot {
     fn trigger_typst_renders(&mut self, cx: &mut Context<Self>) {
-        let requests = self
-            .document
-            .blocks()
-            .iter()
-            .enumerate()
-            .filter_map(|(index, block)| {
-                let Some(TypstAdapter::Pending) = block.typst.as_ref() else {
-                    return None;
-                };
+        let requests = self.workspace.update(cx, |workspace, _cx| {
+            workspace
+                .document()
+                .blocks()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, block)| {
+                    let Some(TypstAdapter::Pending) = block.typst.as_ref() else {
+                        return None;
+                    };
 
-                typst_render_request(block).map(|(kind, source)| {
-                    let cache_key = typst_cache_key(&kind, &source);
-                    (index, block.source.clone(), kind, source, cache_key)
+                    typst_render_request(block).map(|(kind, source)| {
+                        let cache_key = typst_cache_key(&kind, &source);
+                        (index, block.source.clone(), kind, source, cache_key)
+                    })
                 })
-            })
-            .collect::<Vec<_>>();
+                .collect::<Vec<_>>()
+        });
 
         for (index, block_source, kind, source, cache_key) in requests {
             if let Some(cached) = self.typst_cache.get(&cache_key).cloned() {
-                if apply_cached_typst_adapter(&mut self.document, &cache_key, cached) > 0 {
-                    cx.notify();
-                }
+                self.workspace.update(cx, |workspace, cx| {
+                    if apply_cached_typst_adapter(workspace.document_mut(), &cache_key, cached) > 0 {
+                        cx.notify();
+                    }
+                });
                 continue;
             }
 
@@ -888,6 +948,7 @@ impl SolaRoot {
             }
 
             self.typst_in_flight.insert(cache_key.clone());
+            let workspace = self.workspace.clone();
             cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let background = cx.background_executor().clone();
                 let mut async_cx = cx.clone();
@@ -903,16 +964,18 @@ impl SolaRoot {
                         this.typst_cache
                             .insert(cache_key.clone(), next_adapter.clone());
 
-                        if apply_completed_typst_work(
-                            &mut this.document,
-                            &cache_key,
-                            index,
-                            &block_source,
-                            next_adapter.clone(),
-                        ) > 0
-                        {
-                            cx.notify();
-                        }
+                        workspace.update(cx, |workspace, cx| {
+                            if apply_completed_typst_work(
+                                workspace.document_mut(),
+                                &cache_key,
+                                index,
+                                &block_source,
+                                next_adapter.clone(),
+                            ) > 0
+                            {
+                                cx.notify();
+                            }
+                        });
                     });
                 }
             })
@@ -920,151 +983,175 @@ impl SolaRoot {
         }
     }
 
-    fn handle_focused_key_down(&mut self, event: &gpui::KeyDownEvent, window: &mut Window) -> bool {
+    fn handle_focused_key_down(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         self.cursor_visible = true;
         let key = event.keystroke.key.as_str();
         let modifiers = &event.keystroke.modifiers;
         let primary = modifiers.control || modifiers.platform;
 
         if primary && key.eq_ignore_ascii_case("t") {
-            self.toggle_theme();
+            self.toggle_theme(cx);
             return true;
         }
 
-        if primary && modifiers.shift && key.eq_ignore_ascii_case("z") {
-            return self.document.redo();
-        }
-
-        if primary && key.eq_ignore_ascii_case("y") {
-            return self.document.redo();
-        }
-
-        if primary && key.eq_ignore_ascii_case("z") {
-            return self.document.undo();
-        }
-
-        if modifiers.alt && key.eq_ignore_ascii_case("up") {
-            if self.document.focused_has_draft() {
-                self.document.apply_focused_draft();
+        self.workspace.update(cx, |workspace, _cx| {
+            let theme = workspace.theme().clone();
+            let document = workspace.document_mut();
+            if primary && modifiers.shift && key.eq_ignore_ascii_case("z") {
+                return document.redo();
             }
-            return self.document.focus_previous();
-        }
 
-        if modifiers.alt && key.eq_ignore_ascii_case("down") {
-            if self.document.focused_has_draft() {
-                self.document.apply_focused_draft();
+            if primary && key.eq_ignore_ascii_case("y") {
+                return document.redo();
             }
-            return self.document.focus_next();
-        }
 
-        if key.eq_ignore_ascii_case("left") {
-            return self.document.move_cursor_left(modifiers.shift);
-        }
-
-        if key.eq_ignore_ascii_case("right") {
-            return self.document.move_cursor_right(modifiers.shift);
-        }
-
-        if key.eq_ignore_ascii_case("up") {
-            if let Some(target) = self.soft_wrapped_vertical_target(-1, window) {
-                return self.document.set_focused_cursor(target, modifiers.shift);
+            if primary && key.eq_ignore_ascii_case("z") {
+                return document.undo();
             }
-            return self.document.move_cursor_up(modifiers.shift);
-        }
 
-        if key.eq_ignore_ascii_case("down") {
-            if let Some(target) = self.soft_wrapped_vertical_target(1, window) {
-                return self.document.set_focused_cursor(target, modifiers.shift);
+            if modifiers.alt && key.eq_ignore_ascii_case("up") {
+                if document.focused_has_draft() {
+                    document.apply_focused_draft();
+                }
+                return document.focus_previous();
             }
-            return self.document.move_cursor_down(modifiers.shift);
-        }
 
-        if key.eq_ignore_ascii_case("home") {
-            if let Some(target) = self.soft_wrapped_line_edge(window, false) {
-                return self.document.set_focused_cursor(target, modifiers.shift);
+            if modifiers.alt && key.eq_ignore_ascii_case("down") {
+                if document.focused_has_draft() {
+                    document.apply_focused_draft();
+                }
+                return document.focus_next();
             }
-        }
 
-        if key.eq_ignore_ascii_case("end") {
-            if let Some(target) = self.soft_wrapped_line_edge(window, true) {
-                return self.document.set_focused_cursor(target, modifiers.shift);
+            if key.eq_ignore_ascii_case("left") {
+                return document.move_cursor_left(modifiers.shift);
             }
-        }
 
-        if primary && key.eq_ignore_ascii_case("a") {
-            return self.document.select_all();
-        }
+            if key.eq_ignore_ascii_case("right") {
+                return document.move_cursor_right(modifiers.shift);
+            }
 
-        if primary && key.eq_ignore_ascii_case("n") {
-            return self.document.insert_paragraph_after_focused(
-                "Inserted via keyboard shortcut as a structure-editing prototype.",
-            );
-        }
+            if key.eq_ignore_ascii_case("up") {
+                if let Some(target) = self.soft_wrapped_vertical_target(-1, document, &theme, window) {
+                    return document.set_focused_cursor(target, modifiers.shift);
+                }
+                return document.move_cursor_up(modifiers.shift);
+            }
 
-        if primary && key.eq_ignore_ascii_case("d") {
-            return self.document.duplicate_focused_block();
-        }
+            if key.eq_ignore_ascii_case("down") {
+                if let Some(target) = self.soft_wrapped_vertical_target(1, document, &theme, window) {
+                    return document.set_focused_cursor(target, modifiers.shift);
+                }
+                return document.move_cursor_down(modifiers.shift);
+            }
 
-        if primary && key.eq_ignore_ascii_case("backspace") {
-            return self.document.delete_focused_block();
-        }
+            if key.eq_ignore_ascii_case("home") {
+                if let Some(target) = self.visual_line_edge_offset(document, &theme, window, false) {
+                    return document.set_focused_cursor(target, modifiers.shift);
+                }
+            }
 
-        if primary && key.eq_ignore_ascii_case("s") {
-            return self.document.apply_focused_draft();
-        }
+            if key.eq_ignore_ascii_case("end") {
+                if let Some(target) = self.visual_line_edge_offset(document, &theme, window, true) {
+                    return document.set_focused_cursor(target, modifiers.shift);
+                }
+            }
 
-        if key.eq_ignore_ascii_case("escape") {
-            return self.document.revert_focused_draft();
-        }
+            if primary && key.eq_ignore_ascii_case("a") {
+                document.select_all();
+                return true;
+            }
 
-        if key.eq_ignore_ascii_case("backspace") {
-            return self.document.delete_at_cursor_in_focused_draft();
-        }
+            if primary && key.eq_ignore_ascii_case("n") {
+                return document.insert_paragraph_after_focused(
+                    "Inserted via keyboard shortcut as a structure-editing prototype.",
+                );
+            }
 
-        if key.eq_ignore_ascii_case("enter") {
-            return self.document.push_char_to_focused_draft('\n');
-        }
+            if primary && key.eq_ignore_ascii_case("d") {
+                return document.duplicate_focused_block();
+            }
 
-        if !modifiers.control && !modifiers.alt && !modifiers.platform {
-            if let Some(ch) = event.keystroke.key_char.as_deref() {
-                let mut chars = ch.chars();
-                if let Some(single) = chars.next() {
-                    if chars.next().is_none() {
-                        return self.document.push_char_to_focused_draft(single);
+            if primary && key.eq_ignore_ascii_case("backspace") {
+                return document.delete_focused_block();
+            }
+
+            if primary && key.eq_ignore_ascii_case("s") {
+                document.apply_focused_draft();
+                return true;
+            }
+
+            if key.eq_ignore_ascii_case("escape") {
+                document.revert_focused_draft();
+                return true;
+            }
+
+            if key.eq_ignore_ascii_case("backspace") {
+                return document.delete_at_cursor_in_focused_draft();
+            }
+
+            if key.eq_ignore_ascii_case("enter") {
+                return document.push_char_to_focused_draft('\n');
+            }
+
+            if !modifiers.control && !modifiers.alt && !modifiers.platform {
+                if let Some(ch) = event.keystroke.key_char.as_deref() {
+                    let mut chars = ch.chars();
+                    if let Some(single) = chars.next() {
+                        if chars.next().is_none() {
+                            return document.push_char_to_focused_draft(single);
+                        }
                     }
                 }
             }
-        }
 
-        false
+            false
+        })
     }
 
-    fn soft_wrapped_vertical_target(&self, delta: isize, window: &mut Window) -> Option<usize> {
-        let text = self.document.focused_text()?;
-        let cursor = self.document.focused_cursor()?;
-        let style = FocusedEditorStyle::from_theme(&self.theme);
+    fn soft_wrapped_vertical_target(
+        &self,
+        delta: isize,
+        document: &DocumentModel,
+        theme: &Theme,
+        window: &mut Window,
+    ) -> Option<usize> {
+        let text = document.focused_text()?;
+        let cursor = document.focused_cursor()?;
+        let style = FocusedEditorStyle::from_theme(theme);
         let wrap_width = approximate_editor_wrap_width(window.bounds().size.width);
         let lines = shape_focused_lines(
             window,
             text,
             &style,
-            rgb_hex(&self.theme.palette.text_primary),
+            rgb_hex(&theme.palette.text_primary),
             wrap_width,
         )?;
 
         move_cursor_vertical_visual(&lines, cursor.head, delta, style.line_height)
     }
 
-    fn soft_wrapped_line_edge(&self, window: &mut Window, line_end: bool) -> Option<usize> {
-        let text = self.document.focused_text()?;
-        let cursor = self.document.focused_cursor()?;
-        let style = FocusedEditorStyle::from_theme(&self.theme);
+    fn visual_line_edge_offset(
+        &self,
+        document: &DocumentModel,
+        theme: &Theme,
+        window: &mut Window,
+        line_end: bool,
+    ) -> Option<usize> {
+        let text = document.focused_text()?;
+        let cursor = document.focused_cursor()?;
+        let style = FocusedEditorStyle::from_theme(theme);
         let wrap_width = approximate_editor_wrap_width(window.bounds().size.width);
         let lines = shape_focused_lines(
             window,
             text,
             &style,
-            rgb_hex(&self.theme.palette.text_primary),
+            rgb_hex(&theme.palette.text_primary),
             wrap_width,
         )?;
 
@@ -1075,10 +1162,12 @@ impl SolaRoot {
 
 impl Render for SolaRoot {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.workspace.read(cx).theme().clone();
+
         div()
             .size_full()
-            .bg(rgb_hex(&self.theme.palette.app_background))
-            .text_color(rgb_hex(&self.theme.palette.text_primary))
+            .bg(rgb_hex(&theme.palette.app_background))
+            .text_color(rgb_hex(&theme.palette.text_primary))
             .child(
                 div()
                     .size_full()
@@ -1089,28 +1178,14 @@ impl Render for SolaRoot {
                         div()
                             .size_full()
                             .flex()
-                            .child(self.render_sidebar())
+                            .flex_row()
+                            .child(self.render_sidebar(cx))
                             .child(self.render_document_surface(cx)),
                     ),
             )
     }
 }
 
-impl ThemeMode {
-    fn toggle(self) -> Self {
-        match self {
-            ThemeMode::Dark => ThemeMode::Light,
-            ThemeMode::Light => ThemeMode::Dark,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            ThemeMode::Dark => "dark",
-            ThemeMode::Light => "light",
-        }
-    }
-}
 
 fn rgb_hex(hex: &str) -> Hsla {
     rgb(parse_hex_color(hex).unwrap_or(0xffffff)).into()

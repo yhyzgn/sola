@@ -1,0 +1,97 @@
+use gpui::{Context, Entity, EventEmitter};
+use crate::worktree::Worktree;
+use sola_document::DocumentModel;
+use sola_theme::Theme;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeMode {
+    Dark,
+    Light,
+}
+
+impl ThemeMode {
+    pub fn toggle(&self) -> Self {
+        match self {
+            Self::Dark => Self::Light,
+            Self::Light => Self::Dark,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Dark => "dark",
+            Self::Light => "light",
+        }
+    }
+}
+
+pub struct Workspace {
+    worktree: Entity<Worktree>,
+    document: DocumentModel,
+    theme: Theme,
+    theme_mode: ThemeMode,
+    current_path: Option<PathBuf>,
+}
+
+pub enum WorkspaceEvent {
+    DocumentChanged,
+    ThemeChanged,
+}
+
+impl EventEmitter<WorkspaceEvent> for Workspace {}
+
+impl Workspace {
+    pub fn new(worktree: Entity<Worktree>, _cx: &mut Context<Self>) -> Self {
+        Self {
+            worktree,
+            document: DocumentModel::from_markdown(""),
+            theme: Theme::sola_dark(),
+            theme_mode: ThemeMode::Dark,
+            current_path: None,
+        }
+    }
+
+    pub fn worktree(&self) -> &Entity<Worktree> {
+        &self.worktree
+    }
+
+    pub fn document(&self) -> &DocumentModel {
+        &self.document
+    }
+
+    pub fn document_mut(&mut self) -> &mut DocumentModel {
+        &mut self.document
+    }
+
+    pub fn theme(&self) -> &Theme {
+        &self.theme
+    }
+
+    pub fn theme_mode(&self) -> ThemeMode {
+        self.theme_mode
+    }
+
+    pub fn toggle_theme(&mut self, cx: &mut Context<Self>) {
+        self.theme_mode = self.theme_mode.toggle();
+        self.theme = match self.theme_mode {
+            ThemeMode::Dark => Theme::sola_dark(),
+            ThemeMode::Light => Theme::sola_light(),
+        };
+        cx.emit(WorkspaceEvent::ThemeChanged);
+        cx.notify();
+    }
+
+    pub fn current_path(&self) -> Option<&PathBuf> {
+        self.current_path.as_ref()
+    }
+
+    pub fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            self.document = DocumentModel::from_markdown(&content);
+            self.current_path = Some(path);
+            cx.emit(WorkspaceEvent::DocumentChanged);
+            cx.notify();
+        }
+    }
+}

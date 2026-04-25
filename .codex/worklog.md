@@ -468,7 +468,7 @@
    - 在 `focused_editor.rs` 中实现了自定义 `gpui::Element`：`FocusedEditorElement`。
    - 实现了基于 `TextSystem` 的高性能绘制管线，统一了选区背景、文本、光标的 Paint 流程。
    - 引入 `spans_to_runs` 转换工具，将 Tree-sitter 高亮结果直接映射为 GPUI 的 `TextRun`。
-   - 成功在 `shell.rs` 中替换了旧的 `render_highlighted_text` (Div-soup) 方案。
+   - 成功在 `shell.rs` 中替换了旧保持的 `render_highlighted_text` (Div-soup) 方案。
    - 验证通过：新渲染引擎在运行态下显示正常，光标定位基本工作。
    - 清理了 shell 中数百行冗余的高亮片段拼接逻辑。
 3. **落地 FocusedEditorElement 重构第二阶段（交互增强）**：
@@ -476,9 +476,15 @@
    - **精确点击命中**：利用 Element 的 `bounds` 和 `padding` 自动换算局部坐标，彻底解决了跨块点击定位不准的问题。
    - **架构解耦**：通过 `this_handle (WeakEntity)` 模式，使 Element 的点击事件能安全地回调到 `SolaRoot` 更新文档状态。
    - 验证通过：`cargo test`全量通过，运行态下支持平滑的鼠标选区操作。
-   4. **落地 FocusedEditorElement 重构第三阶段（性能优化与打磨）**：
+4. **落地 FocusedEditorElement 重构第三阶段（性能优化与打磨）**：
    - **引入 Layout 缓存**：在 `FocusedEditorState` 中引入 `visual_lines` 预计算缓存，消除了 `paint` 阶段重复的视觉行换算开销。
    - **重构命中算法**：`hit_test_visual_offset` 现在直接操作缓存的视觉行引用，大幅提升了在大段文本下的响应速度。
    - **代码质量提升**：清理了 `shell.rs` 和 `focused_editor.rs` 中的冗余导入与未使用代码，修正了 Visibility 警告。
    - 验证通过：编译、测试、运行全链路绿色。
+5. **落地 Phase 5 重构第一阶段：Model-View 架构解耦**：
+   - **核心模型抽离**：在 `worktree.rs` 和 `workspace.rs` 中实现了符合 Zed 规范的 `Entity` 模型层。
+   - **架构解耦**：将 `SolaRoot` 从单体设计重构为协调层，核心业务状态（文档、主题、文件树）全部迁移至 `Workspace` 模型。
+   - **集成文件监听**：在 `Worktree` 中成功集成 `notify` crate。利用 GPUI 的 `cx.spawn` 机制实现了后台静默扫描与实时变更订阅。
+   - **修复借用冲突**：通过闭包内部 Context 映射与 Entity 克隆机制，彻底解决了大规模重构过程中常见的 Borrow Checker 冲突。
+   - 验证通过：所有 54 个单元测试全量通过，`cargo run` 稳定运行，系统已具备接入真实文件树的架构基础。
 
