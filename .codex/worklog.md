@@ -274,3 +274,13 @@
     - `cargo test -p sola-document`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+57. 完成 Typst 编译结果缓存：
+    - `sola-app` 新增 `typst_cache`，键为 `RenderKind + rendered source`。
+    - `trigger_typst_renders` 现在会先查缓存；命中时直接回填 `TypstAdapter`，未命中才进入后台编译。
+    - 后台编译完成后会把 `Rendered/Error` 结果写入缓存，供后续相同内容复用。
+    - 为缓存 key 和结果映射 helper 增加了 TDD 回归测试。
+58. Typst 缓存阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）

@@ -11,7 +11,10 @@ use sola_document::{
 };
 use sola_theme::{Theme, parse_hex_color};
 use sola_typst::{RenderKind, TypstError, compile_to_svg};
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 #[cfg(target_os = "linux")]
 use std::{
     env,
@@ -50,6 +53,7 @@ struct SolaRoot {
     theme: Theme,
     document: DocumentModel,
     highlighter: SyntaxHighlighter,
+    typst_cache: HashMap<String, TypstAdapter>,
     typst_in_flight: HashSet<usize>,
 }
 
@@ -67,6 +71,7 @@ impl SolaRoot {
             theme: Theme::sola_dark(),
             document: DocumentModel::from_markdown(sample_markdown()),
             highlighter: SyntaxHighlighter::new_rust(),
+            typst_cache: HashMap::new(),
             typst_in_flight: HashSet::new(),
         }
     }
@@ -968,12 +973,28 @@ impl SolaRoot {
                     return None;
                 };
 
-                typst_render_request(block)
-                    .map(|(kind, source)| (index, block.source.clone(), kind, source))
+                typst_render_request(block).map(|(kind, source)| {
+                    let cache_key = typst_cache_key(&kind, &source);
+                    (index, block.source.clone(), kind, source, cache_key)
+                })
             })
             .collect::<Vec<_>>();
 
-        for (index, block_source, kind, source) in requests {
+        for (index, block_source, kind, source, cache_key) in requests {
+            if let Some(cached) = self.typst_cache.get(&cache_key).cloned() {
+                let previous_focus = self.document.focused_block();
+                if self.document.focus_block(index) {
+                    if let Some(block) = self.document.focused_block_mut() {
+                        block.typst = Some(cached);
+                    }
+                    let restore_index =
+                        previous_focus.min(self.document.block_count().saturating_sub(1));
+                    let _ = self.document.focus_block(restore_index);
+                    cx.notify();
+                }
+                continue;
+            }
+
             self.typst_in_flight.insert(index);
             cx.spawn(move |this: WeakEntity<Self>, cx: &mut AsyncApp| {
                 let background = cx.background_executor().clone();
@@ -983,9 +1004,11 @@ impl SolaRoot {
                     let result = background
                         .spawn(async move { compile_to_svg(&source, kind) })
                         .await;
+                    let next_adapter = typst_adapter_from_result(result);
 
                     let _ = this.update(&mut async_cx, |this, cx| {
                         this.typst_in_flight.remove(&index);
+                        this.typst_cache.insert(cache_key, next_adapter.clone());
 
                         let Some(current_block) = this.document.blocks().get(index) else {
                             return;
@@ -1003,7 +1026,7 @@ impl SolaRoot {
                         let updated = this
                             .document
                             .focused_block_mut()
-                            .map(|block| apply_typst_result(block, result))
+                            .map(|block| apply_typst_adapter(block, next_adapter))
                             .unwrap_or(false);
 
                         let restore_index =
@@ -1308,17 +1331,17 @@ fn typst_render_request(block: &DocumentBlock) -> Option<(RenderKind, String)> {
     }
 }
 
+#[cfg(test)]
 fn apply_typst_result(block: &mut DocumentBlock, result: Result<String, TypstError>) -> bool {
+    apply_typst_adapter(block, typst_adapter_from_result(result))
+}
+
+fn apply_typst_adapter(block: &mut DocumentBlock, adapter: TypstAdapter) -> bool {
     if block.typst.is_none() {
         return false;
     }
 
-    block.typst = Some(match result {
-        Ok(svg) => TypstAdapter::Rendered { svg },
-        Err(error) => TypstAdapter::Error {
-            message: error.to_string(),
-        },
-    });
+    block.typst = Some(adapter);
 
     true
 }
@@ -1327,6 +1350,23 @@ fn clickable_chars(text: &str, start: usize) -> Vec<(usize, String)> {
     text.char_indices()
         .map(|(offset, ch)| (start + offset, ch.to_string()))
         .collect()
+}
+
+fn typst_cache_key(kind: &RenderKind, source: &str) -> String {
+    let prefix = match kind {
+        RenderKind::Math => "math",
+        RenderKind::Block => "block",
+    };
+    format!("{prefix}::{source}")
+}
+
+fn typst_adapter_from_result(result: Result<String, TypstError>) -> TypstAdapter {
+    match result {
+        Ok(svg) => TypstAdapter::Rendered { svg },
+        Err(error) => TypstAdapter::Error {
+            message: error.to_string(),
+        },
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1385,7 +1425,10 @@ fn unix_socket_reachable(path: &Path) -> bool {
 mod tests {
     #[cfg(target_os = "linux")]
     use super::unix_socket_reachable;
-    use super::{apply_typst_result, clickable_chars, typst_render_request};
+    use super::{
+        apply_typst_result, clickable_chars, typst_adapter_from_result, typst_cache_key,
+        typst_render_request,
+    };
     use sola_document::{DocumentModel, TypstAdapter};
     use sola_typst::{RenderKind, TypstError};
     #[cfg(target_os = "linux")]
@@ -1470,5 +1513,29 @@ Hello
                 (14, "b".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn typst_cache_key_distinguishes_render_kind() {
+        assert_ne!(
+            typst_cache_key(&RenderKind::Math, "x + y"),
+            typst_cache_key(&RenderKind::Block, "x + y")
+        );
+        assert_eq!(
+            typst_cache_key(&RenderKind::Math, "x + y"),
+            typst_cache_key(&RenderKind::Math, "x + y")
+        );
+    }
+
+    #[test]
+    fn typst_adapter_from_result_maps_success_and_error() {
+        assert!(matches!(
+            typst_adapter_from_result(Ok("<svg />".to_string())),
+            TypstAdapter::Rendered { ref svg } if svg == "<svg />"
+        ));
+        assert!(matches!(
+            typst_adapter_from_result(Err(TypstError::Compile("bad typst".to_string()))),
+            TypstAdapter::Error { ref message } if message.contains("bad typst")
+        ));
     }
 }
