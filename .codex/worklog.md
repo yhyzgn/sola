@@ -414,3 +414,12 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+87. 搭建 wrapped layout hit-testing groundwork：
+    - `focused_editor` 新增视觉行 y 命中 helper。
+    - `focused_editor` 新增基于 wrapped line 的 offset hit-testing helper。
+    - 这些 helper 目前先完成模块级实现与测试，为后续把点击命中迁到真实文本布局提供基础。
+88. Wrapped layout hit-testing groundwork 阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）

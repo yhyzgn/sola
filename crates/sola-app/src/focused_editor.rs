@@ -39,7 +39,8 @@ struct VisualLineRef {
     global_start: usize,
     global_end: usize,
     wrapped_line_start: usize,
-    row: usize,
+    local_row: usize,
+    global_row: usize,
     line: WrappedLine,
 }
 
@@ -91,7 +92,14 @@ pub fn move_cursor_vertical_visual(
 ) -> Option<usize> {
     let visual_lines = collect_visual_lines(lines);
     let current_visual_line = find_visual_line(&visual_lines, current_offset)?;
-    let target_visual_line = current_visual_line.checked_add_signed(delta)?;
+    let target_global_row = shift_visual_row(
+        visual_lines.get(current_visual_line)?.global_row,
+        delta,
+        visual_lines.len(),
+    )?;
+    let target_visual_line = visual_lines
+        .iter()
+        .position(|line| line.global_row == target_global_row)?;
     let current = visual_lines.get(current_visual_line)?;
     let target = visual_lines.get(target_visual_line)?;
 
@@ -105,7 +113,7 @@ pub fn move_cursor_vertical_visual(
         .closest_index_for_position(
             Point {
                 x: current_point.x,
-                y: line_height * target.row as f32,
+                y: line_height * target.local_row as f32,
             },
             line_height,
         )
@@ -117,6 +125,7 @@ pub fn move_cursor_vertical_visual(
 fn collect_visual_lines(lines: &[WrappedLine]) -> Vec<VisualLineRef> {
     let mut visual = Vec::new();
     let mut global_base = 0;
+    let mut global_row = 0;
 
     for line in lines {
         let mut boundaries = line
@@ -130,15 +139,17 @@ fn collect_visual_lines(lines: &[WrappedLine]) -> Vec<VisualLineRef> {
         boundaries.push(line.len());
 
         let mut local_start = 0;
-        for (row, local_end) in boundaries.into_iter().enumerate() {
+        for (local_row, local_end) in boundaries.into_iter().enumerate() {
             visual.push(VisualLineRef {
                 global_start: global_base + local_start,
                 global_end: global_base + local_end,
                 wrapped_line_start: local_start,
-                row,
+                local_row,
+                global_row,
                 line: line.clone(),
             });
             local_start = local_end;
+            global_row += 1;
         }
 
         global_base += line.text.len() + 1;
@@ -151,6 +162,42 @@ fn find_visual_line(lines: &[VisualLineRef], offset: usize) -> Option<usize> {
     lines
         .iter()
         .position(|line| offset >= line.global_start && offset <= line.global_end)
+}
+
+fn shift_visual_row(current_row: usize, delta: isize, total_rows: usize) -> Option<usize> {
+    let target = current_row.checked_add_signed(delta)?;
+    (target < total_rows).then_some(target)
+}
+
+fn visual_row_for_y(y: Pixels, line_height: Pixels, total_rows: usize) -> Option<usize> {
+    let row = (y / line_height) as usize;
+    (row < total_rows).then_some(row)
+}
+
+#[allow(dead_code)]
+pub fn hit_test_visual_offset(
+    lines: &[WrappedLine],
+    point: Point<Pixels>,
+    line_height: Pixels,
+) -> Option<usize> {
+    let visual_lines = collect_visual_lines(lines);
+    let global_row = visual_row_for_y(point.y, line_height, visual_lines.len())?;
+    let line = visual_lines
+        .iter()
+        .find(|line| line.global_row == global_row)?;
+
+    let local = line
+        .line
+        .closest_index_for_position(
+            Point {
+                x: point.x,
+                y: line_height * line.local_row as f32,
+            },
+            line_height,
+        )
+        .unwrap_or_else(|index| index);
+
+    Some(line.global_start + local.saturating_sub(line.wrapped_line_start))
 }
 
 #[cfg(test)]
@@ -174,5 +221,20 @@ mod tests {
     fn approximate_wrap_width_reserves_sidebar_and_padding_budget() {
         assert_eq!(approximate_editor_wrap_width(px(1000.0)), px(580.0));
         assert_eq!(approximate_editor_wrap_width(px(300.0)), px(120.0));
+    }
+
+    #[test]
+    fn shift_visual_row_respects_bounds() {
+        assert_eq!(shift_visual_row(1, 1, 3), Some(2));
+        assert_eq!(shift_visual_row(1, -1, 3), Some(0));
+        assert_eq!(shift_visual_row(0, -1, 3), None);
+        assert_eq!(shift_visual_row(2, 1, 3), None);
+    }
+
+    #[test]
+    fn visual_row_for_y_respects_bounds() {
+        assert_eq!(visual_row_for_y(px(0.0), px(18.0), 3), Some(0));
+        assert_eq!(visual_row_for_y(px(20.0), px(18.0), 3), Some(1));
+        assert_eq!(visual_row_for_y(px(60.0), px(18.0), 3), None);
     }
 }

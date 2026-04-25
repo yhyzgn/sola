@@ -15,6 +15,7 @@
 - **编辑区错行问题已继续压缩**：代码区现优先保留显式行结构，HTML 适配文本去掉了固定节点间距；这降低了“本该同一行却被拆开”的概率，但完整的文本引擎级 inline rich text 排版仍未完成。
 - **Focused editor 重构底座已建立**：`sola-app` 现已抽出独立的 `focused_editor` 模块，用于承载后续基于 GPUI 文本布局系统的真实编辑面迁移。
 - **软换行级垂直移动已开始接入真实布局**：`focused_editor` 现在已具备基于 `shape_text / WrappedLine` 的视觉行 helper，`↑/↓` 开始改走真实布局推导，而不是只依赖显式换行。
+- **Wrapped layout hit-testing groundwork 已建立**：`focused_editor` 现已补齐视觉行 y 命中和 wrapped layout offset 命中 helper，为下一步把点击定位正式迁到真实文本布局模型做好准备。
 - **界面已完成“拆除脚手架”美化**：移除了冗余的卡片边框、按钮和标签，实现了纯净的文档视图；引入了 `Auto-apply on blur` 交互，实现了原地编辑与自动保存的无缝衔接。
 - **Typst 预览已扩展到行内公式**：`sola-document` 现在还能为包含 `$...$` 的段落/列表/引用块建立 `TypstAdapter` 状态，`sola-app` 会将这些 blurred block 作为整块 Typst 文本进行异步预览。
 - **离线导出流水线已启动第一阶段**：新增独立的 `sola-export` crate，当前已支持导出当前文档的 `Markdown` 与带主题样式注入的静态 `HTML`。
