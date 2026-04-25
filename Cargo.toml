@@ -4,6 +4,7 @@ members = [
     "crates/sola-app",
     "crates/sola-core",
     "crates/sola-document",
+    "crates/sola-export",
     "crates/sola-theme",
     "crates/sola-typst",
 ]

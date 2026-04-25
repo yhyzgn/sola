@@ -1,0 +1,12 @@
+[package]
+name = "sola-export"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+pulldown-cmark.workspace = true
+sola-document = { path = "../sola-document" }
+sola-theme = { path = "../sola-theme" }

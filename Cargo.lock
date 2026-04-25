@@ -5524,6 +5524,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sola-export"
+version = "0.1.0"
+dependencies = [
+ "pulldown-cmark",
+ "sola-document",
+ "sola-theme",
+]
+
+[[package]]
 name = "sola-theme"
 version = "0.1.0"
 dependencies = [

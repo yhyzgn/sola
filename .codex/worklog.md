@@ -349,3 +349,14 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+73. 启动离线导出流水线第一阶段：
+    - 新增 `crates/sola-export` crate，作为独立于渲染器的离线导出入口。
+    - 当前 `sola-export` 已支持：
+      - `Markdown`：导出当前 `DocumentModel::source()`
+      - `HTML`：通过 `pulldown-cmark` 生成静态 HTML，并注入 `sola-theme` 的页面级样式变量
+    - 为 `Markdown` 和 `HTML` 两条导出路径增加了单元测试。
+74. 导出基础设施阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-export`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）

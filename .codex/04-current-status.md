@@ -11,6 +11,7 @@
 - **键盘输入根因已回到框架用法层修复**：这次对照 GPUI 官方 `input.rs` 示例后，编辑区的 `track_focus` 与 `on_key_down` 已统一落到同一个 editor surface，上层 block 仅保留点击/展示职责。
 - **界面已完成“拆除脚手架”美化**：移除了冗余的卡片边框、按钮和标签，实现了纯净的文档视图；引入了 `Auto-apply on blur` 交互，实现了原地编辑与自动保存的无缝衔接。
 - **Typst 预览已扩展到行内公式**：`sola-document` 现在还能为包含 `$...$` 的段落/列表/引用块建立 `TypstAdapter` 状态，`sola-app` 会将这些 blurred block 作为整块 Typst 文本进行异步预览。
+- **离线导出流水线已启动第一阶段**：新增独立的 `sola-export` crate，当前已支持导出当前文档的 `Markdown` 与带主题样式注入的静态 `HTML`。
 
 ## 关键架构决策 (Key Decisions)
 1. **Tree-sitter 借用优化**：由于 GPUI 渲染闭包需要不可变借用，而 `tree-sitter::Parser` 的 `parse` 需要 `&mut self`。为了避免在 UI 层传递可变引用，`SyntaxHighlighter` 内部使用了 `RefCell<Parser>`，实现了渲染层的“逻辑不可变”访问。
@@ -32,6 +33,6 @@
 - **点击命中仍是字符级近似**：当前 focused editor 通过“每字符可点击单元 + 背景点击回到末尾”完成光标定位，尚未做到基于真实排版 bounds 的左右半区/软换行精确命中。
 
 ## 下一步建议 (Next Steps)
+- 继续把 `sola-export` 从 `Markdown/HTML` 扩展到真正的 PDF / 长图目标。
 - 支持更细粒度的 Typst 脏块重渲染与真正的原生 inline formula 布局。
 - 基于真实文本布局数据进一步提升鼠标命中精度，并补上上下方向键跨视觉行移动。
-- 搭建离线导出流水线。
