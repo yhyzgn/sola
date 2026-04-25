@@ -1,4 +1,7 @@
-use crate::focused_editor::FocusedEditorStyle;
+use crate::focused_editor::{
+    FocusedEditorStyle, approximate_editor_wrap_width, move_cursor_vertical_visual,
+    shape_focused_lines,
+};
 use gpui::{
     AppContext, Application, AsyncApp, Bounds, Context, Div, FocusHandle, FontWeight, Hsla, Image,
     ImageFormat, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
@@ -366,8 +369,8 @@ impl SolaRoot {
             .min_w_0()
             .min_h_0()
             .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(|this, event, _window, cx| {
-                if this.handle_focused_key_down(event) {
+            .on_key_down(cx.listener(|this, event, window, cx| {
+                if this.handle_focused_key_down(event, window) {
                     cx.notify();
                 }
             }))
@@ -1136,7 +1139,7 @@ impl SolaRoot {
         }
     }
 
-    fn handle_focused_key_down(&mut self, event: &gpui::KeyDownEvent) -> bool {
+    fn handle_focused_key_down(&mut self, event: &gpui::KeyDownEvent, window: &mut Window) -> bool {
         self.cursor_visible = true;
         let key = event.keystroke.key.as_str();
         let modifiers = &event.keystroke.modifiers;
@@ -1182,10 +1185,16 @@ impl SolaRoot {
         }
 
         if key.eq_ignore_ascii_case("up") {
+            if let Some(target) = self.soft_wrapped_vertical_target(-1, window) {
+                return self.document.set_focused_cursor(target, modifiers.shift);
+            }
             return self.document.move_cursor_up(modifiers.shift);
         }
 
         if key.eq_ignore_ascii_case("down") {
+            if let Some(target) = self.soft_wrapped_vertical_target(1, window) {
+                return self.document.set_focused_cursor(target, modifiers.shift);
+            }
             return self.document.move_cursor_down(modifiers.shift);
         }
 
@@ -1235,6 +1244,22 @@ impl SolaRoot {
         }
 
         false
+    }
+
+    fn soft_wrapped_vertical_target(&self, delta: isize, window: &mut Window) -> Option<usize> {
+        let text = self.document.focused_text()?;
+        let cursor = self.document.focused_cursor()?;
+        let style = FocusedEditorStyle::from_theme(&self.theme);
+        let wrap_width = approximate_editor_wrap_width(window.bounds().size.width);
+        let lines = shape_focused_lines(
+            window,
+            text,
+            &style,
+            rgb_hex(&self.theme.palette.text_primary),
+            wrap_width,
+        )?;
+
+        move_cursor_vertical_visual(&lines, cursor.head, delta, style.line_height)
     }
 }
 

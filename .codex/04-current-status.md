@@ -14,6 +14,7 @@
 - **Caret 覆盖绘制已走正路**：当前 focused caret 已改为绝对定位覆盖绘制，不再通过会参与文本流布局的节点来冒充光标。
 - **编辑区错行问题已继续压缩**：代码区现优先保留显式行结构，HTML 适配文本去掉了固定节点间距；这降低了“本该同一行却被拆开”的概率，但完整的文本引擎级 inline rich text 排版仍未完成。
 - **Focused editor 重构底座已建立**：`sola-app` 现已抽出独立的 `focused_editor` 模块，用于承载后续基于 GPUI 文本布局系统的真实编辑面迁移。
+- **软换行级垂直移动已开始接入真实布局**：`focused_editor` 现在已具备基于 `shape_text / WrappedLine` 的视觉行 helper，`↑/↓` 开始改走真实布局推导，而不是只依赖显式换行。
 - **界面已完成“拆除脚手架”美化**：移除了冗余的卡片边框、按钮和标签，实现了纯净的文档视图；引入了 `Auto-apply on blur` 交互，实现了原地编辑与自动保存的无缝衔接。
 - **Typst 预览已扩展到行内公式**：`sola-document` 现在还能为包含 `$...$` 的段落/列表/引用块建立 `TypstAdapter` 状态，`sola-app` 会将这些 blurred block 作为整块 Typst 文本进行异步预览。
 - **离线导出流水线已启动第一阶段**：新增独立的 `sola-export` crate，当前已支持导出当前文档的 `Markdown` 与带主题样式注入的静态 `HTML`。
@@ -39,6 +40,7 @@
 - **软换行与视觉行距仍需进一步精修**：当前行高已经收紧，但 `↑/↓` 仍只覆盖显式换行，真正的视觉软换行移动和更精确的文本排版还需继续推进。
 - **HTML 适配文本仍需更精细的行内布局**：当前已去掉节点间固定 gap，但真正严丝合缝的 inline rich text 排版还需要从 flex 拼接过渡到更接近文本引擎的布局模型。
 - **Focused 编辑区仍未真正切到 TextLayout/WrappedLine 驱动**：当前只是完成了参数与结构抽离，下一步才会开始把 caret / selection / 点击命中 / 软换行移动真正迁到 GPUI 文本布局模型上。
+- **点击命中仍未切到真实 WrappedLine 布局**：当前点击定位仍主要沿用旧路径，后续需要继续把 click hit-testing 也迁到这套视觉行 helper 上。
 
 ## 下一步建议 (Next Steps)
 - 继续把 `sola-export` 从 `Markdown/HTML` 扩展到真正的 PDF / 长图目标。

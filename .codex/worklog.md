@@ -405,3 +405,12 @@
     - `cargo test -p sola-app`
     - `cargo test --workspace`
     - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
+85. 开始把软换行垂直移动接到真实文本布局：
+    - `focused_editor` 新增基于 `shape_text / WrappedLine` 的 helper，用于推导视觉行层面的垂直移动目标。
+    - `sola-app` 的 `↑/↓` 现在优先尝试 soft-wrap 级别的目标推导，再回退到显式换行逻辑。
+    - 这一步是 focused 编辑区迁往真实文本布局驱动的第一条功能性接线。
+86. Soft-wrap 垂直移动接线阶段验证：
+    - `cargo fmt --all`
+    - `cargo test -p sola-app`
+    - `cargo test --workspace`
+    - `timeout 10s cargo run`（完成编译并进入运行态，超时退出符合预期）
