@@ -14,3 +14,4 @@ sola-core = { path = "../sola-core" }
 sola-document = { path = "../sola-document" }
 sola-theme = { path = "../sola-theme" }
 sola-typst = { path = "../sola-typst" }
+tokio = { version = "1.52.1", features = ["sync"] }

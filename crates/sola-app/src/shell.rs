@@ -85,11 +85,22 @@ impl SolaRoot {
         let workspace = cx.new(|cx| Workspace::new(worktree, cx));
 
         // Sync initial document with sample markdown
-        workspace.update(cx, |this, _| {
-            *this.document_mut() = DocumentModel::from_markdown(sample_markdown());
+        workspace.update(cx, |this, cx| {
+            this.update_document(cx, |doc| {
+                *doc = DocumentModel::from_markdown(sample_markdown());
+            });
         });
 
-        Self {
+        use crate::workspace::WorkspaceEvent;
+        cx.subscribe(&workspace, |this, _workspace, event, cx| match event {
+            WorkspaceEvent::DocumentChanged => {
+                this.trigger_typst_renders(cx);
+            }
+            WorkspaceEvent::ThemeChanged => {}
+        })
+        .detach();
+
+        let mut this = Self {
             focus_handle: cx.focus_handle(),
             this_handle: None,
             workspace,
@@ -98,7 +109,10 @@ impl SolaRoot {
             typst_in_flight: HashSet::new(),
             cursor_visible: true,
             cursor_blink_started: false,
-        }
+        };
+
+        this.trigger_typst_renders(cx);
+        this
     }
 
     fn toggle_theme(&mut self, cx: &mut Context<Self>) {
@@ -291,7 +305,6 @@ impl SolaRoot {
         };
 
         self.ensure_cursor_blink_loop(cx);
-        self.trigger_typst_renders(cx);
         let blocks = document.blocks().iter().enumerate().fold(
             div().flex().flex_col().gap(px(14.0)).p(px(24.0)),
             |surface, (index, block)| surface.child(self.render_block(index, block, cx)),
@@ -307,9 +320,9 @@ impl SolaRoot {
             .id("previous-block")
             .on_click(cx.listener(move |_this, _event, _window, cx| {
                 workspace.update(cx, |workspace, cx| {
-                    if workspace.document_mut().focus_previous() {
-                        cx.notify();
-                    }
+                    workspace.update_document(cx, |document| {
+                        document.focus_previous();
+                    });
                 });
             }))
         };
@@ -324,9 +337,9 @@ impl SolaRoot {
             .id("next-block")
             .on_click(cx.listener(move |_this, _event, _window, cx| {
                 workspace.update(cx, |workspace, cx| {
-                    if workspace.document_mut().focus_next() {
-                        cx.notify();
-                    }
+                    workspace.update_document(cx, |document| {
+                        document.focus_next();
+                    });
                 });
             }))
         };
@@ -346,11 +359,11 @@ impl SolaRoot {
                 .id("insert-paragraph")
                 .on_click(cx.listener(move |_this, _event, _window, cx| {
                     workspace.update(cx, |workspace, cx| {
-                        if workspace.document_mut().insert_paragraph_after_focused(
-                            "A new paragraph block inserted by the structure editing prototype.",
-                        ) {
-                            cx.notify();
-                        }
+                        workspace.update_document(cx, |document| {
+                            document.insert_paragraph_after_focused(
+                                "A new paragraph block inserted by the structure editing prototype.",
+                            );
+                        });
                     });
                 }))
         };
@@ -361,9 +374,9 @@ impl SolaRoot {
                 .id("duplicate-block")
                 .on_click(cx.listener(move |_this, _event, _window, cx| {
                     workspace.update(cx, |workspace, cx| {
-                        if workspace.document_mut().duplicate_focused_block() {
-                            cx.notify();
-                        }
+                        workspace.update_document(cx, |document| {
+                            document.duplicate_focused_block();
+                        });
                     });
                 }))
         };
@@ -378,9 +391,9 @@ impl SolaRoot {
             .id("delete-block")
             .on_click(cx.listener(move |_this, _event, _window, cx| {
                 workspace.update(cx, |workspace, cx| {
-                    if workspace.document_mut().delete_focused_block() {
-                        cx.notify();
-                    }
+                    workspace.update_document(cx, |document| {
+                        document.delete_focused_block();
+                    });
                 });
             }))
         };
@@ -391,9 +404,9 @@ impl SolaRoot {
                 .id("undo")
                 .on_click(cx.listener(move |_this, _event, _window, cx| {
                     workspace.update(cx, |workspace, cx| {
-                        if workspace.document_mut().undo() {
-                            cx.notify();
-                        }
+                        workspace.update_document(cx, |document| {
+                            document.undo();
+                        });
                     });
                 }))
         };
@@ -404,9 +417,9 @@ impl SolaRoot {
                 .id("redo")
                 .on_click(cx.listener(move |_this, _event, _window, cx| {
                     workspace.update(cx, |workspace, cx| {
-                        if workspace.document_mut().redo() {
-                            cx.notify();
-                        }
+                        workspace.update_document(cx, |document| {
+                            document.redo();
+                        });
                     });
                 }))
         };
@@ -472,6 +485,7 @@ impl SolaRoot {
                                 draft_label.to_string(),
                                 &theme,
                             ))
+                            .child(shortcut_chip("Ctrl/Cmd+T", "toggle theme", &theme))
                             .child(shortcut_legend(&theme)),
                     ),
             )
@@ -542,9 +556,9 @@ impl SolaRoot {
                                     this.workspace.update(cx, |workspace, cx| {
                                         window.focus(&this.focus_handle);
                                         this.cursor_visible = true;
-                                        if workspace.document_mut().set_focused_cursor(offset, shift) {
-                                            cx.notify();
-                                        }
+                                        workspace.update_document(cx, |document| {
+                                            document.set_focused_cursor(offset, shift);
+                                        });
                                     });
                                 });
                             }),
@@ -562,26 +576,25 @@ impl SolaRoot {
                 gpui::MouseButton::Left,
                 cx.listener(move |this, _event, window, cx| {
                     this.workspace.update(cx, |workspace, cx| {
-                        let document = workspace.document_mut();
-                        let plan = plan_block_click(
-                            document.focused_block(),
-                            index,
-                            document.focused_has_draft(),
-                        );
+                        workspace.update_document(cx, |document| {
+                            let plan = plan_block_click(
+                                document.focused_block(),
+                                index,
+                                document.focused_has_draft(),
+                            );
 
-                        if plan.apply_draft {
-                            document.apply_focused_draft();
-                        }
+                            if plan.apply_draft {
+                                document.apply_focused_draft();
+                            }
 
-                        if plan.switch_block_focus {
-                            document.focus_block(index);
-                        }
+                            if plan.switch_block_focus {
+                                document.focus_block(index);
+                            }
 
-                        if plan.refresh_window_focus {
-                            window.focus(&this.focus_handle);
-                        }
-
-                        cx.notify();
+                            if plan.refresh_window_focus {
+                                window.focus(&this.focus_handle);
+                            }
+                        });
                     });
                 }),
             )
@@ -999,9 +1012,9 @@ impl SolaRoot {
             return true;
         }
 
-        self.workspace.update(cx, |workspace, _cx| {
+        self.workspace.update(cx, |workspace, cx| {
             let theme = workspace.theme().clone();
-            let document = workspace.document_mut();
+            workspace.update_document(cx, |document| {
             if primary && modifiers.shift && key.eq_ignore_ascii_case("z") {
                 return document.redo();
             }
@@ -1111,6 +1124,7 @@ impl SolaRoot {
             }
 
             false
+            })
         })
     }
 

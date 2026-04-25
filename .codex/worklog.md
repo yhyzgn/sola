@@ -487,4 +487,9 @@
    - **集成文件监听**：在 `Worktree` 中成功集成 `notify` crate。利用 GPUI 的 `cx.spawn` 机制实现了后台静默扫描与实时变更订阅。
    - **修复借用冲突**：通过闭包内部 Context 映射与 Entity 克隆机制，彻底解决了大规模重构过程中常见的 Borrow Checker 冲突。
    - 验证通过：所有 54 个单元测试全量通过，`cargo run` 稳定运行，系统已具备接入真实文件树的架构基础。
+6. **紧急修复：解决 UI 假死与无限渲染循环问题**：
+   - **消除同步阻塞**：将 `worktree.rs` 中的 `rx.recv()` 同步调用替换为基于 `tokio::sync::mpsc` 的异步 `recv().await`，彻底释放了被锁死的 UI 线程。
+   - **剥离渲染副作用**：将 `trigger_typst_renders` 从 `render` 方法中剔除，改为通过订阅 `WorkspaceEvent::DocumentChanged` 驱动。
+   - **重构模型访问**：引入 `update_document` 统一文档修改入口，确保所有的编辑行为（键盘、按钮、点击）都能正确分发事件并触发渲染。
+   - 验证通过：`cargo run` 稳定运行，无“Not Responding”现象，Typst 渲染管线响应及时。
 

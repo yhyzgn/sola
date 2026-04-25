@@ -64,6 +64,17 @@ impl Workspace {
         &mut self.document
     }
 
+    pub fn update_document<R>(
+        &mut self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut DocumentModel) -> R,
+    ) -> R {
+        let result = f(&mut self.document);
+        cx.emit(WorkspaceEvent::DocumentChanged);
+        cx.notify();
+        result
+    }
+
     pub fn theme(&self) -> &Theme {
         &self.theme
     }

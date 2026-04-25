@@ -24,15 +24,17 @@ impl EventEmitter<WorktreeEvent> for Worktree {}
 impl Worktree {
     pub fn local(path: impl Into<PathBuf>, cx: &mut App) -> Entity<Self> {
         let abs_path = path.into().canonicalize().unwrap_or_else(|_| PathBuf::from("."));
-        let mut worktree = Self {
+        
+        let handle = cx.new(|_| Self {
             abs_path: abs_path.clone(),
             entries: Vec::new(),
             _watcher: None,
-        };
+        });
 
-        worktree.scan();
+        handle.update(cx, |this, _| this.scan());
         
-        let (tx, rx) = std::sync::mpsc::channel();
+        let weak_handle = handle.downgrade();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         
         let mut watcher = notify::recommended_watcher(move |res| {
             if let Ok(_) = res {
@@ -44,15 +46,14 @@ impl Worktree {
             let _ = watcher.watch(&abs_path, RecursiveMode::Recursive);
         }
 
-        worktree._watcher = watcher;
-
-        let handle = cx.new(|_| worktree);
-        let weak_handle = handle.downgrade();
+        handle.update(cx, |this, _| {
+            this._watcher = watcher;
+        });
 
         cx.spawn(|cx: &mut AsyncApp| {
             let mut cx = cx.clone();
             async move {
-                while let Ok(_) = rx.recv() {
+                while let Some(_) = rx.recv().await {
                     if let Err(_) = weak_handle.update(&mut cx, |this, cx| {
                         this.scan();
                         cx.emit(WorktreeEvent::Updated);
