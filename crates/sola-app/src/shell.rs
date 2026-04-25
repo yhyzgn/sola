@@ -1,14 +1,15 @@
 use crate::focused_editor::{
     FocusedEditorElement, FocusedEditorStyle, approximate_editor_wrap_width,
-    hit_test_visual_offset, move_cursor_vertical_visual, shape_focused_lines, spans_to_runs,
-    visual_line_edge_offset, visual_line_ranges,
+    move_cursor_vertical_visual, shape_focused_lines, spans_to_runs, visual_line_edge_offset,
+    visual_line_ranges,
 };
 use gpui::{
     AppContext, Application, AsyncApp, Bounds, Context, Div, FocusHandle, FontWeight, Hsla, Image,
-    ImageFormat, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
+    ImageFormat, InteractiveElement, IntoElement, ParentElement, Render,
     StatefulInteractiveElement, Styled, WeakEntity, Window, WindowBounds, WindowOptions, div, img,
     px, rgb, size,
 };
+
 use sola_core::{APP_NAME, APP_TAGLINE, ROADMAP_PHASES, sample_markdown};
 use sola_document::highlighter::SyntaxHighlighter;
 use sola_document::{BlockKind, DocumentBlock, DocumentModel, HtmlAdapter, HtmlNode, TypstAdapter};
@@ -45,7 +46,14 @@ pub fn run() {
                 ))),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| SolaRoot::new(cx)),
+            |_window, cx| {
+                let handle = cx.new(|cx| SolaRoot::new(cx));
+                let weak_handle = handle.downgrade();
+                handle.update(cx, |this, _| {
+                    this.this_handle = Some(weak_handle);
+                });
+                handle
+            },
         )
         .expect("open GPUI window");
     });
@@ -53,6 +61,7 @@ pub fn run() {
 
 struct SolaRoot {
     focus_handle: FocusHandle,
+    this_handle: Option<WeakEntity<Self>>,
     theme_mode: ThemeMode,
     theme: Theme,
     document: DocumentModel,
@@ -80,6 +89,7 @@ impl SolaRoot {
     fn new(cx: &mut Context<Self>) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
+            this_handle: None,
             theme_mode: ThemeMode::Dark,
             theme: Theme::sola_dark(),
             document: DocumentModel::from_markdown(sample_markdown()),
@@ -469,42 +479,35 @@ impl SolaRoot {
             let selection_color = rgb_hex(&self.theme.palette.selection);
             let cursor_color = rgb_hex(&self.theme.palette.cursor);
 
-            div().flex_1().child(
-                div()
-                    .bg(rgb_hex(&self.theme.palette.code_background))
-                    .rounded(px(8.0))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
-                            window.focus(&this.focus_handle);
-                            this.cursor_visible = true;
-                            let changed = this
-                                .soft_wrapped_hit_test(window, event.position)
-                                .map(|offset| {
-                                    this.document
-                                        .set_focused_cursor(offset, event.modifiers.shift)
-                                })
-                                .unwrap_or_else(|| {
-                                    let end =
-                                        this.document.focused_text().map(str::len).unwrap_or(0);
-                                    this.document.set_focused_cursor(end, event.modifiers.shift)
+            if let Some(this_handle) = self.this_handle.clone() {
+                div().flex_1().child(
+                    div()
+                        .bg(rgb_hex(&self.theme.palette.code_background))
+                        .rounded(px(8.0))
+                        .child(
+                            FocusedEditorElement::new(
+                                text,
+                                editor_style,
+                                runs,
+                                self.document.focused_cursor().cloned(),
+                                self.cursor_visible,
+                                selection_color,
+                                cursor_color,
+                            )
+                            .on_cursor_move(move |offset, shift, window, cx| {
+                                let _ = this_handle.update(cx, |this, cx| {
+                                    window.focus(&this.focus_handle);
+                                    this.cursor_visible = true;
+                                    if this.document.set_focused_cursor(offset, shift) {
+                                        cx.notify();
+                                    }
                                 });
-                            cx.stop_propagation();
-                            if changed {
-                                cx.notify();
-                            }
-                        }),
-                    )
-                    .child(FocusedEditorElement::new(
-                        text,
-                        editor_style,
-                        runs,
-                        self.document.focused_cursor().cloned(),
-                        self.cursor_visible,
-                        selection_color,
-                        cursor_color,
-                    )),
-            )
+                            }),
+                        ),
+                )
+            } else {
+                div().flex_1()
+            }
         } else {
             div().flex_1().child(self.render_blurred_content(block))
         };
@@ -1067,26 +1070,6 @@ impl SolaRoot {
 
         let visual = visual_line_ranges(&lines);
         visual_line_edge_offset(&visual, cursor.head, line_end)
-    }
-
-    fn soft_wrapped_hit_test(
-        &self,
-        window: &mut Window,
-        point: gpui::Point<gpui::Pixels>,
-    ) -> Option<usize> {
-        let text = self.document.focused_text()?;
-        let style = FocusedEditorStyle::from_theme(&self.theme);
-        let wrap_width = approximate_editor_wrap_width(window.bounds().size.width);
-        let lines = shape_focused_lines(
-            window,
-            text,
-            &style,
-            rgb_hex(&self.theme.palette.text_primary),
-            wrap_width,
-        )?;
-
-        // TODO: Figure out local point translation in next phase
-        hit_test_visual_offset(&lines, point, style.line_height)
     }
 }
 

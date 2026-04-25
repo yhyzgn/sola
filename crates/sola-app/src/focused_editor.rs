@@ -1,11 +1,12 @@
 use gpui::{
-    App, Bounds, Element, ElementId, Font, FontFeatures, FontStyle, FontWeight, GlobalElementId,
-    Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, Point, SharedString, Style, TextAlign,
-    TextRun, Window, WrappedLine, px,
+    App, Bounds, DispatchPhase, Element, ElementId, Font, FontFeatures, FontStyle, FontWeight,
+    GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, Pixels, Point, SharedString, Style, TextAlign, TextRun, Window, WrappedLine, px,
 };
 use sola_document::highlighter::{HighlightKind, HighlightedSpan};
 use sola_document::CursorState;
 use sola_theme::{Theme, parse_hex_color};
+use std::sync::Arc;
 
 fn rgb_hex(hex: &str) -> Hsla {
     gpui::rgb(parse_hex_color(hex).unwrap_or(0xffffff)).into()
@@ -74,10 +75,6 @@ impl FocusedEditorStyle {
             padding_y: px(6.0),
             caret_width: px(2.0),
         }
-    }
-
-    pub fn font_size_f32(&self) -> f32 {
-        self.font_size.into()
     }
 }
 
@@ -290,6 +287,7 @@ pub struct FocusedEditorElement {
     cursor_visible: bool,
     selection_color: Hsla,
     cursor_color: Hsla,
+    on_cursor_move: Option<Arc<dyn Fn(usize, bool, &mut Window, &mut App) + Send + Sync>>,
 }
 
 impl FocusedEditorElement {
@@ -310,7 +308,16 @@ impl FocusedEditorElement {
             cursor_visible,
             selection_color,
             cursor_color,
+            on_cursor_move: None,
         }
+    }
+
+    pub fn on_cursor_move(
+        mut self,
+        callback: impl Fn(usize, bool, &mut Window, &mut App) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_cursor_move = Some(Arc::new(callback));
+        self
     }
 }
 
@@ -319,7 +326,7 @@ pub struct FocusedEditorState {
 }
 
 impl Element for FocusedEditorElement {
-    type RequestLayoutState = Vec<WrappedLine>;
+    type RequestLayoutState = FocusedEditorState;
     type PrepaintState = ();
 
     fn id(&self) -> Option<ElementId> {
@@ -353,7 +360,7 @@ impl Element for FocusedEditorElement {
 
         let layout_id = window.request_layout(style, None, cx);
 
-        (layout_id, lines)
+        (layout_id, FocusedEditorState { lines })
     }
 
     fn prepaint(
@@ -377,8 +384,11 @@ impl Element for FocusedEditorElement {
         _prepaint_state: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
-    ) {
+        ) {
+
+        let lines = &request_layout_state.lines;
         let line_height = self.style.line_height;
+
         let padding = Point {
             x: self.style.padding_x,
             y: self.style.padding_y,
@@ -398,7 +408,7 @@ impl Element for FocusedEditorElement {
             let start = anchor.min(cursor.head);
             let end = anchor.max(cursor.head);
 
-            let visual_lines = collect_visual_lines(request_layout_state);
+            let visual_lines = collect_visual_lines(lines);
             for visual_line in visual_lines {
                 let overlap_start = start.max(visual_line.global_start);
                 let overlap_end = end.min(visual_line.global_end);
@@ -428,7 +438,7 @@ impl Element for FocusedEditorElement {
 
         // 2. Paint Text
         let mut y_offset = Pixels::ZERO;
-        for line in request_layout_state.iter() {
+        for line in lines.iter() {
             line.paint(
                 text_bounds.origin + Point { x: Pixels::ZERO, y: y_offset },
                 line_height,
@@ -445,7 +455,7 @@ impl Element for FocusedEditorElement {
         if let Some(cursor) = &self.cursor
             && self.cursor_visible
         {
-            let visual_lines = collect_visual_lines(request_layout_state);
+            let visual_lines = collect_visual_lines(lines);
             if let Some(visual_line_idx) = find_visual_line_ref(&visual_lines, cursor.head) {
                 let visual_line = &visual_lines[visual_line_idx];
                 let local_offset =
@@ -464,6 +474,62 @@ impl Element for FocusedEditorElement {
 
                 window.paint_quad(gpui::fill(caret_bounds, self.cursor_color));
             }
+        }
+
+        // 4. Handle Interactivity (Clicks and Drags)
+        if let Some(on_cursor_move) = &self.on_cursor_move {
+            let on_cursor_move = on_cursor_move.clone();
+            let line_height = self.style.line_height;
+            let lines = lines.clone();
+
+            // Mouse Down: Set anchor and head
+            let on_cursor_move_down = on_cursor_move.clone();
+            let lines_down = lines.clone();
+            window.on_mouse_event(
+                move |event: &MouseDownEvent, phase: DispatchPhase, window, cx| {
+                    if phase == DispatchPhase::Bubble && bounds.contains(&event.position) {
+                        let local_point = event.position - text_bounds.origin;
+                        if let Some(offset) =
+                            hit_test_visual_offset(&lines_down, local_point, line_height)
+                        {
+                            on_cursor_move_down(offset, event.modifiers.shift, window, cx);
+                        } else {
+                            let end = lines_down
+                                .iter()
+                                .map(|l| l.text.len() + 1)
+                                .sum::<usize>()
+                                .saturating_sub(1);
+                            on_cursor_move_down(end, event.modifiers.shift, window, cx);
+                        }
+                    }
+                },
+            );
+
+            // Mouse Move (Drag): Update head only
+            let on_cursor_move_drag = on_cursor_move.clone();
+            let lines_drag = lines.clone();
+            window.on_mouse_event(
+                move |event: &MouseMoveEvent, phase: DispatchPhase, window, cx| {
+                    if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left)
+                    {
+                        let local_point = event.position - text_bounds.origin;
+                        if let Some(offset) =
+                            hit_test_visual_offset(&lines_drag, local_point, line_height)
+                        {
+                            on_cursor_move_drag(offset, true, window, cx);
+                        } else if local_point.y < Pixels::ZERO {
+                            on_cursor_move_drag(0, true, window, cx);
+                        } else {
+                            let end = lines_drag
+                                .iter()
+                                .map(|l| l.text.len() + 1)
+                                .sum::<usize>()
+                                .saturating_sub(1);
+                            on_cursor_move_drag(end, true, window, cx);
+                        }
+                    }
+                },
+            );
         }
     }
 }

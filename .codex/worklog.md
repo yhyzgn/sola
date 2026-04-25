@@ -471,3 +471,8 @@
    - 成功在 `shell.rs` 中替换了旧的 `render_highlighted_text` (Div-soup) 方案。
    - 验证通过：新渲染引擎在运行态下显示正常，光标定位基本工作。
    - 清理了 shell 中数百行冗余的高亮片段拼接逻辑。
+3. **落地 FocusedEditorElement 重构第二阶段（交互增强）**：
+   - **支持拖拽选区**：在 Element 内部注册 `MouseMove` 监听，实现了通过鼠标拖拽扩展选区的交互，完全对齐 Zed 体验。
+   - **精确点击命中**：利用 Element 的 `bounds` 和 `padding` 自动换算局部坐标，彻底解决了跨块点击定位不准的问题。
+   - **架构解耦**：通过 `this_handle (WeakEntity)` 模式，使 Element 的点击事件能安全地回调到 `SolaRoot` 更新文档状态。
+   - 验证通过：`cargo test` 全量通过，运行态下支持平滑的鼠标选区操作。
