@@ -5599,6 +5599,8 @@ dependencies = [
  "gpui",
  "ignore",
  "notify",
+ "serde",
+ "serde_json",
  "sola-core",
  "sola-document",
  "sola-theme",

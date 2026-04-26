@@ -37,6 +37,7 @@ pub struct Workspace {
 pub enum WorkspaceEvent {
     DocumentChanged,
     ThemeChanged,
+    WorktreeChanged,
 }
 
 impl EventEmitter<WorkspaceEvent> for Workspace {}
@@ -54,6 +55,12 @@ impl Workspace {
 
     pub fn worktree(&self) -> &Entity<Worktree> {
         &self.worktree
+    }
+
+    pub fn update_worktree(&mut self, worktree: Entity<Worktree>, cx: &mut Context<Self>) {
+        self.worktree = worktree;
+        cx.emit(WorkspaceEvent::WorktreeChanged);
+        cx.notify();
     }
 
     pub fn document(&self) -> &DocumentModel {

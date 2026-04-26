@@ -1,16 +1,17 @@
+use crate::actions::{Open, Quit, Redo, Save, ToggleTheme, Undo};
 use crate::focused_editor::{
     FocusedEditorElement, FocusedEditorStyle, approximate_editor_wrap_width,
     move_cursor_vertical_visual, shape_focused_lines, spans_to_runs, visual_line_edge_offset,
     visual_line_ranges,
 };
-use crate::worktree::Worktree;
-use crate::workspace::Workspace;
 use crate::project_panel::ProjectPanel;
+use crate::workspace::Workspace;
+use crate::worktree::Worktree;
 use gpui::{
     AppContext, Application, AsyncApp, Bounds, Context, Div, Entity, FocusHandle, FontWeight, Hsla,
- Image, ImageFormat, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, WindowBounds, WindowOptions, div, img,
-    px, rgb, size,
+    Image, ImageFormat, InteractiveElement, IntoElement, KeyBinding, Menu, MenuItem, ParentElement,
+    Render, StatefulInteractiveElement, Styled, WeakEntity, Window, WindowBounds, WindowOptions,
+    div, img, px, rgb, size,
 };
 
 use sola_core::{APP_NAME, APP_TAGLINE, sample_markdown};
@@ -38,6 +39,46 @@ pub fn run() {
     }
 
     Application::new().run(|cx| {
+        cx.set_menus(vec![
+            Menu {
+                name: "Sola".into(),
+                items: vec![MenuItem::action("Quit", Quit)],
+            },
+            Menu {
+                name: "File".into(),
+                items: vec![
+                    MenuItem::action("Open...", Open),
+                    MenuItem::action("Save", Save),
+                ],
+            },
+            Menu {
+                name: "Edit".into(),
+                items: vec![
+                    MenuItem::action("Undo", Undo),
+                    MenuItem::action("Redo", Redo),
+                ],
+            },
+            Menu {
+                name: "View".into(),
+                items: vec![MenuItem::action("Toggle Theme", ToggleTheme)],
+            },
+        ]);
+
+        cx.bind_keys([
+            KeyBinding::new("cmd-o", Open, None),
+            KeyBinding::new("ctrl-o", Open, None),
+            KeyBinding::new("cmd-s", Save, None),
+            KeyBinding::new("ctrl-s", Save, None),
+            KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("ctrl-q", Quit, None),
+            KeyBinding::new("cmd-z", Undo, None),
+            KeyBinding::new("ctrl-z", Undo, None),
+            KeyBinding::new("cmd-shift-z", Redo, None),
+            KeyBinding::new("ctrl-shift-z", Redo, None),
+            KeyBinding::new("cmd-t", ToggleTheme, None),
+            KeyBinding::new("ctrl-t", ToggleTheme, None),
+        ]);
+
         cx.on_window_closed(|cx| cx.quit()).detach();
 
         cx.open_window(
@@ -104,6 +145,7 @@ impl SolaRoot {
                 this.trigger_typst_renders(cx);
             }
             WorkspaceEvent::ThemeChanged => {}
+            WorkspaceEvent::WorktreeChanged => {} // Not handled here anymore
         })
         .detach();
 
@@ -121,6 +163,50 @@ impl SolaRoot {
 
         this.trigger_typst_renders(cx);
         this
+    }
+
+    fn open_project(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        use gpui::PathPromptOptions;
+        let this_handle = self.this_handle.clone();
+
+        let paths_rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: true,
+            multiple: false,
+            prompt: Some("Open File or Folder".into()),
+        });
+
+        cx.spawn(|_this, cx: &mut gpui::AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                if let Ok(Ok(Some(paths))) = paths_rx.await {
+                    if let Some(path) = paths.first() {
+                        if let Some(this_handle) = this_handle {
+                            let path = path.clone();
+                            let _ = this_handle.update(&mut cx, |this, cx| {
+                                if path.is_dir() {
+                                    // New Worktree
+                                    let worktree = Worktree::local(path, cx);
+                                    this.workspace.update(cx, |workspace, cx| {
+                                        workspace.update_worktree(worktree, cx);
+                                    });
+                                } else {
+                                    // Open File
+                                    let dir = path.parent().unwrap_or(&path);
+                                    let worktree = Worktree::local(dir, cx);
+                                    this.workspace.update(cx, |workspace, cx| {
+                                        workspace.update_worktree(worktree, cx);
+                                        workspace.open_file(path, cx);
+                                    });
+                                }
+                                cx.notify();
+                            });
+                        }
+                    }
+                }
+            }
+        })
+        .detach();
     }
 
     fn toggle_theme(&mut self, cx: &mut Context<Self>) {
@@ -1116,6 +1202,34 @@ impl Render for SolaRoot {
             .size_full()
             .bg(rgb_hex(&theme.palette.app_background))
             .text_color(rgb_hex(&theme.palette.text_primary))
+            .on_action(cx.listener(|this, _action: &Open, window, cx| {
+                this.open_project(window, cx);
+            }))
+            .on_action(cx.listener(|this, _action: &Save, _window, cx| {
+                this.workspace.update(cx, |workspace, cx| {
+                    workspace.save_current_file(cx);
+                });
+            }))
+            .on_action(cx.listener(|_this, _action: &Quit, _window, cx| {
+                cx.quit();
+            }))
+            .on_action(cx.listener(|this, _action: &Undo, _window, cx| {
+                this.workspace.update(cx, |workspace, cx| {
+                    workspace.update_document(cx, |doc| {
+                        doc.undo();
+                    });
+                });
+            }))
+            .on_action(cx.listener(|this, _action: &Redo, _window, cx| {
+                this.workspace.update(cx, |workspace, cx| {
+                    workspace.update_document(cx, |doc| {
+                        doc.redo();
+                    });
+                });
+            }))
+            .on_action(cx.listener(|this, _action: &ToggleTheme, _window, cx| {
+                this.toggle_theme(cx);
+            }))
             .child(
                 div()
                     .size_full()

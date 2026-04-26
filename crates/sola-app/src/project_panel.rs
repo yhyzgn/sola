@@ -25,13 +25,21 @@ impl ProjectPanel {
     pub fn set_handle(&mut self, handle: WeakEntity<Self>, cx: &mut Context<Self>) {
         self.this_handle = Some(handle);
         
-        cx.subscribe(&self.workspace, |_this, _workspace, event, cx| match event {
+        cx.subscribe(&self.workspace, |this, _workspace, event, cx| match event {
             WorkspaceEvent::DocumentChanged | WorkspaceEvent::ThemeChanged => {
+                cx.notify();
+            }
+            WorkspaceEvent::WorktreeChanged => {
+                this.subscribe_to_worktree(cx);
                 cx.notify();
             }
         })
         .detach();
 
+        self.subscribe_to_worktree(cx);
+    }
+
+    fn subscribe_to_worktree(&mut self, cx: &mut Context<Self>) {
         let worktree = self.workspace.read(cx).worktree().clone();
         cx.subscribe(&worktree, |_this, _worktree, event, cx| match event {
             WorktreeEvent::Updated => {
