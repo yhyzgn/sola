@@ -1,5 +1,6 @@
 use crate::actions::{
-    CloseTab, NewFile, Open, OpenFile, OpenFolder, Quit, Redo, Save, SaveAs, ToggleTheme, Undo,
+    CloseTab, NewFile, Open, OpenFile, OpenFolder, Preferences, Quit, Redo, Save, SaveAs,
+    ToggleTheme, Undo,
 };
 use crate::focused_editor::{
     FocusedEditorElement, FocusedEditorStyle, approximate_editor_wrap_width,
@@ -17,7 +18,7 @@ use gpui::{
     WindowBounds, WindowOptions, div, img, px, rgb, size,
 };
 
-use sola_core::{APP_NAME, APP_TAGLINE, sample_markdown};
+use sola_core::sample_markdown;
 use sola_document::highlighter::SyntaxHighlighter;
 use sola_document::{BlockKind, DocumentBlock, DocumentModel, HtmlAdapter, HtmlNode, TypstAdapter};
 use sola_theme::{Theme, parse_hex_color};
@@ -47,6 +48,7 @@ pub struct SolaRoot {
     active_menu: Option<&'static str>,
     active_submenu: Option<&'static str>,
     document_list_state: gpui::ListState,
+    show_preferences: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +104,7 @@ impl SolaRoot {
             active_menu: None,
             active_submenu: None,
             document_list_state,
+            show_preferences: false,
         };
 
         this.trigger_typst_renders(cx);
@@ -706,47 +709,105 @@ impl SolaRoot {
         .detach();
     }
 
-    fn render_header(&self, cx: &mut Context<Self>) -> Div {
-        let workspace = self.workspace.read(cx);
-        let theme = workspace.theme();
+    fn render_preferences_modal(&self, cx: &mut Context<Self>) -> Option<gpui::Stateful<Div>> {
+        if !self.show_preferences {
+            return None;
+        }
 
-        div()
-            .flex()
-            .justify_between()
-            .items_center()
-            .p(px(20.0))
-            .border_b_1()
-            .border_color(rgb_hex(&theme.palette.panel_border))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
-                    .child(
-                        div()
-                            .text_size(px(theme.typography.title_size as f32))
-                            .font_weight(FontWeight::BOLD)
-                            .child(APP_NAME),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(14.0))
-                            .text_color(rgb_hex(&theme.palette.text_muted))
-                            .child(APP_TAGLINE),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap(px(12.0))
-                    .child(pill("workspace", format!("{} crates", 4), theme))
-                    .child(pill(
-                        "focused block",
-                        format!("#{}", workspace.active_document_ref().map_or(0, |d| d.focused_block() + 1)),
-                        theme,
-                    ))
-                    .child(pill("roadmap", "phase 1 / 2 / 5".to_string(), theme)),
-            )
+        let theme = self.workspace.read(cx).theme().clone();
+
+        Some(
+            div()
+                .id("preferences-modal-mask")
+                .absolute()
+                .top(px(0.0))
+                .left(px(0.0))
+                .size_full()
+                .bg(gpui::hsla(0.0, 0.0, 0.0, 0.4))
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                    this.show_preferences = false;
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .w(px(600.0))
+                        .bg(rgb_hex(&theme.palette.panel_background))
+                        .border_1()
+                        .border_color(rgb_hex(&theme.palette.panel_border))
+                        .rounded(px(12.0))
+                        .p(px(24.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(24.0))
+                        .on_mouse_down(MouseButton::Left, |_, _, _| {}) // Stop propagation
+                        .child(
+                            div()
+                                .flex()
+                                .justify_between()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .text_size(px(18.0))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(rgb_hex(&theme.palette.text_primary))
+                                        .child("Preferences"),
+                                )
+                                .child(
+                                    div()
+                                        .p(px(4.0))
+                                        .text_size(px(14.0))
+                                        .text_color(rgb_hex(&theme.palette.text_muted))
+                                        .cursor_pointer()
+                                        .hover(|s| s.text_color(rgb_hex(&theme.palette.text_primary)))
+                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                            this.show_preferences = false;
+                                            cx.notify();
+                                        }))
+                                        .child("✕"),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(12.0))
+                                .child(section_title("GENERAL", &theme))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .justify_between()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .text_size(px(14.0))
+                                                .text_color(rgb_hex(&theme.palette.text_primary))
+                                                .child("Color Theme"),
+                                        )
+                                        .child(
+                                            action_button(
+                                                format!("Toggle (Currently {})", self.workspace.read(cx).theme_mode().label()),
+                                                &theme,
+                                                true,
+                                            )
+                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                this.toggle_theme(cx);
+                                            })),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(12.0))
+                                .child(section_title("KEYBOARD SHORTCUTS", &theme))
+                                .child(shortcut_legend(&theme)),
+                        )
+                )
+        )
     }
 
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> Div {
@@ -843,114 +904,6 @@ impl SolaRoot {
         self.document_list_state.reset(document.block_count());
         let weak_handle = cx.weak_entity();
 
-        let previous_button = {
-            let workspace = self.workspace.clone();
-            let can_prev = document.focused_block() > 0;
-            action_button("← previous block".to_string(), &theme, can_prev)
-                .id("previous-block")
-                .on_click(cx.listener(move |_this, _event, _window, cx| {
-                    workspace.update(cx, |workspace, cx| {
-                        workspace.update_active_document(cx, |doc| {
-                            doc.focus_previous();
-                        });
-                    });
-                }))
-        };
-
-        let next_button = {
-            let workspace = self.workspace.clone();
-            let can_next = document.focused_block() + 1 < document.block_count();
-            action_button("next block →".to_string(), &theme, can_next)
-                .id("next-block")
-                .on_click(cx.listener(move |_this, _event, _window, cx| {
-                    workspace.update(cx, |workspace, cx| {
-                        workspace.update_active_document(cx, |doc| {
-                            doc.focus_next();
-                        });
-                    });
-                }))
-        };
-
-        let focused_summary = document
-            .focused_block_ref()
-            .map(|block| block.rendered.clone())
-            .unwrap_or_else(|| "no focused block".to_string());
-        let draft_label = if document.focused_has_draft() {
-            "draft pending"
-        } else {
-            "source synced"
-        };
-
-        let insert_button = {
-            let workspace = self.workspace.clone();
-            action_button("insert paragraph".to_string(), &theme, true)
-                .id("insert-paragraph")
-                .on_click(cx.listener(move |_this, _event, _window, cx| {
-                    workspace.update(cx, |workspace, cx| {
-                        workspace.update_active_document(cx, |doc| {
-                            doc.insert_paragraph_after_focused(
-                                "A new paragraph block inserted by the structure editing prototype.",
-                            );
-                        });
-                    });
-                }))
-        };
-
-        let duplicate_button = {
-            let workspace = self.workspace.clone();
-            action_button("duplicate block".to_string(), &theme, true)
-                .id("duplicate-block")
-                .on_click(cx.listener(move |_this, _event, _window, cx| {
-                    workspace.update(cx, |workspace, cx| {
-                        workspace.update_active_document(cx, |doc| {
-                            doc.duplicate_focused_block();
-                        });
-                    });
-                }))
-        };
-
-        let delete_button = {
-            let workspace = self.workspace.clone();
-            let can_delete = document.block_count() > 1;
-            action_button("delete block".to_string(), &theme, can_delete)
-                .id("delete-block")
-                .on_click(cx.listener(move |_this, _event, _window, cx| {
-                    workspace.update(cx, |workspace, cx| {
-                        workspace.update_active_document(cx, |doc| {
-                            doc.delete_focused_block();
-                        });
-                    });
-                }))
-        };
-
-        let undo_button = {
-            let workspace = self.workspace.clone();
-            let can_undo = document.can_undo();
-            action_button("undo".to_string(), &theme, can_undo)
-                .id("undo")
-                .on_click(cx.listener(move |_this, _event, _window, cx| {
-                    workspace.update(cx, |workspace, cx| {
-                        workspace.update_active_document(cx, |doc| {
-                            doc.undo();
-                        });
-                    });
-                }))
-        };
-
-        let redo_button = {
-            let workspace = self.workspace.clone();
-            let can_redo = document.can_redo();
-            action_button("redo".to_string(), &theme, can_redo)
-                .id("redo")
-                .on_click(cx.listener(move |_this, _event, _window, cx| {
-                    workspace.update(cx, |workspace, cx| {
-                        workspace.update_active_document(cx, |doc| {
-                            doc.redo();
-                        });
-                    });
-                }))
-        };
-
         div()
             .flex()
             .flex_col()
@@ -965,44 +918,6 @@ impl SolaRoot {
             }))
             .child(
                 div()
-                    .p(px(24.0))
-                    .border_b_1()
-                    .border_color(rgb_hex(&theme.palette.panel_border))
-                    .child(
-                        div()
-                            .flex()
-                            .justify_between()
-                            .items_center()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(8.0))
-                                    .child(section_title("STRUCTURE EDITOR", &theme))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .gap(px(8.0))
-                                            .items_center()
-                                            .child(pill("focused", truncate_for_pill(&focused_summary, 32), &theme))
-                                            .child(pill("state", draft_label.to_string(), &theme)),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap(px(12.0))
-                                    .child(previous_button)
-                                    .child(next_button)
-                                    .child(div().w(px(1.0)).h(px(24.0)).bg(rgb_hex(&theme.palette.panel_border)))
-                                    .child(insert_button)
-                                    .child(duplicate_button)
-                                    .child(delete_button),
-                            ),
-                    ),
-            )
-            .child(
-                div()
                     .id("main-scroll-container")
                     .flex()
                     .flex_col()
@@ -1013,53 +928,25 @@ impl SolaRoot {
                         div()
                             .flex()
                             .flex_col()
-                            .gap(px(32.0))
-                            .p(px(32.0))
+                            .flex_1()
+                            .py(px(32.0))
                             .max_w(px(900.0))
                             .mx_auto()
-                            .child(
-                                div()
-                                    .flex()
-                                    .justify_between()
-                                    .items_center()
-                                    .child(section_title("DOCUMENT SURFACE", &theme))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .gap(px(12.0))
-                                            .child(undo_button)
-                                            .child(redo_button),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(16.0))
-                                    .flex_1()
-                                    .child(gpui::list(self.document_list_state.clone(), move |idx, _window, cx| {
-                                        let weak_handle = weak_handle.clone();
-                                        weak_handle.update(cx, |this, cx| {
-                                            let workspace = this.workspace.read(cx);
-                                            let theme = workspace.theme();
-                                            let Some(doc) = workspace.active_document_ref() else {
-                                                return div().into_any_element();
-                                            };
-                                            let Some(block) = doc.blocks().get(idx) else {
-                                                return div().into_any_element();
-                                            };
-                                            
-                                            this.render_block(idx, block, doc, theme, weak_handle.clone()).into_any_element()
-                                        }).unwrap_or_else(|_| div().into_any_element())
-                                    }).size_full())
-                            )
-                            .child(
-                                div()
-                                    .mt(px(24.0))
-                                    .pt(px(24.0))
-                                    .border_t_1()
-                                    .border_color(rgb_hex(&theme.palette.panel_border))
-                                    .child(section_title("KEYBOARD SHORTCUTS", &theme))
-                                    .child(div().mt(px(16.0)).child(shortcut_legend(&theme))),
-                            ),
+                            .child(gpui::list(self.document_list_state.clone(), move |idx, _window, cx| {
+                                let weak_handle = weak_handle.clone();
+                                weak_handle.update(cx, |this, cx| {
+                                    let workspace = this.workspace.read(cx);
+                                    let theme = workspace.theme();
+                                    let Some(doc) = workspace.active_document_ref() else {
+                                        return div().into_any_element();
+                                    };
+                                    let Some(block) = doc.blocks().get(idx) else {
+                                        return div().into_any_element();
+                                    };
+                                    
+                                    this.render_block(idx, block, doc, theme, weak_handle.clone()).into_any_element()
+                                }).unwrap_or_else(|_| div().into_any_element())
+                            }).size_full())
                     ),
             )
     }
@@ -1862,6 +1749,10 @@ impl Render for SolaRoot {
                     }
                 });
             }))
+            .on_action(cx.listener(|this, _action: &Preferences, _window, cx| {
+                this.show_preferences = !this.show_preferences;
+                cx.notify();
+            }))
             .child(self.render_menu_bar(cx))
             .child(
                 div()
@@ -1869,7 +1760,6 @@ impl Render for SolaRoot {
                     .flex()
                     .flex_col()
                     .min_h_0()
-                    .child(self.render_header(cx))
                     .child(
                         div()
                             .flex_1()
@@ -1891,6 +1781,9 @@ impl Render for SolaRoot {
             .when_some(self.render_menu_mask(cx), |this, mask| this.child(mask))
             .when_some(self.render_menu_overlay(cx), |this, overlay| {
                 this.child(overlay)
+            })
+            .when_some(self.render_preferences_modal(cx), |this, modal| {
+                this.child(modal)
             })
     }
 }
@@ -1957,6 +1850,8 @@ pub fn run() {
             KeyBinding::new("ctrl-shift-z", Redo, None),
             KeyBinding::new("cmd-t", ToggleTheme, None),
             KeyBinding::new("ctrl-t", ToggleTheme, None),
+            KeyBinding::new("cmd-,", Preferences, None),
+            KeyBinding::new("ctrl-,", Preferences, None),
         ]);
 
         cx.on_window_closed(|cx| cx.quit()).detach();
@@ -2096,14 +1991,6 @@ fn shortcut_chip(key: &str, label: &str, theme: &Theme) -> Div {
                 .text_color(rgb_hex(&theme.palette.text_muted))
                 .child(label.to_string()),
         )
-}
-
-fn truncate_for_pill(input: &str, max_chars: usize) -> String {
-    let mut output = input.chars().take(max_chars).collect::<String>();
-    if input.chars().count() > max_chars {
-        output.push('…');
-    }
-    output
 }
 
 fn typst_render_request(block: &DocumentBlock) -> Option<(RenderKind, String)> {
