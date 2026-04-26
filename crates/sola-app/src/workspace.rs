@@ -123,4 +123,26 @@ impl Workspace {
             }
         }
     }
+
+    pub fn create_file(&mut self, parent_dir: PathBuf, name: &str) {
+        let path = parent_dir.join(name);
+        let _ = std::fs::write(path, "");
+    }
+
+    pub fn create_dir(&mut self, parent_dir: PathBuf, name: &str) {
+        let path = parent_dir.join(name);
+        let _ = std::fs::create_dir_all(path);
+    }
+
+    pub fn rename_entry(&mut self, old_path: PathBuf, new_path: PathBuf) {
+        let _ = std::fs::rename(old_path, new_path);
+    }
+
+    pub fn delete_entry(&mut self, path: PathBuf) {
+        if path.is_dir() {
+            let _ = std::fs::remove_dir_all(path);
+        } else {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
