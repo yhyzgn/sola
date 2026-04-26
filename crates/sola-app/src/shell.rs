@@ -96,6 +96,7 @@ pub fn run() {
                 handle.update(cx, |this, _| {
                     this.this_handle = Some(weak_handle);
                 });
+                _window.focus(&handle.read(cx).focus_handle);
                 handle
             },
         )
@@ -246,6 +247,21 @@ impl SolaRoot {
     fn render_header(&self, cx: &mut Context<Self>) -> Div {
         let workspace = self.workspace.read(cx);
         let theme = workspace.theme();
+
+        let open_btn = action_button("Open...".to_string(), theme, true)
+            .id("open-project")
+            .on_click(cx.listener(|this, _event, window, cx| {
+                this.open_project(window, cx);
+            }));
+
+        let save_btn = action_button("Save".to_string(), theme, true)
+            .id("save-project")
+            .on_click(cx.listener(|this, _event, _window, cx| {
+                this.workspace.update(cx, |workspace, cx| {
+                    workspace.save_current_file(cx);
+                });
+            }));
+
         let toggle_theme = action_button(
             format!("theme: {}", workspace.theme_mode().label()),
             theme,
@@ -285,6 +301,8 @@ impl SolaRoot {
                 div()
                     .flex()
                     .gap(px(12.0))
+                    .child(open_btn)
+                    .child(save_btn)
                     .child(toggle_theme)
                     .child(pill("workspace", format!("{} crates", 4), theme))
                     .child(pill(
