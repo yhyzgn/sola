@@ -18,6 +18,7 @@ pub enum HtmlNode {
     Text(String),
     StyledText(HtmlStyledText),
     Image(HtmlImage),
+    InlineMath(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -924,84 +925,93 @@ fn typst_adapter_for_block(kind: &BlockKind, rendered: &str) -> Option<TypstAdap
 }
 
 fn adapt_html(source: &str) -> Option<HtmlAdapter> {
-    if !source.contains('<') || !source.contains('>') {
-        return None;
-    }
-
     let mut remaining = source.trim();
     let mut nodes = Vec::new();
-    let mut saw_html = false;
+    let mut saw_special = false;
 
-    while let Some(start) = remaining.find('<') {
-        let before = &remaining[..start];
-        if !before.is_empty() {
-            nodes.push(HtmlNode::Text(before.to_string()));
-        }
-
-        let tag_start = &remaining[start..];
-        if tag_start.starts_with("<img") {
-            let Some(tag_end) = tag_start.find('>') else {
-                return Some(HtmlAdapter::Unsupported {
-                    raw: source.trim().to_string(),
-                });
-            };
-
-            let tag = &tag_start[..=tag_end];
-            let Some(image) = parse_img_tag(tag) else {
-                return Some(HtmlAdapter::Unsupported {
-                    raw: source.trim().to_string(),
-                });
-            };
-
-            nodes.push(HtmlNode::Image(image));
-            remaining = &tag_start[tag_end + 1..];
-            saw_html = true;
-            continue;
-        }
-
-        if tag_start.starts_with("<span") {
-            let Some(open_end) = tag_start.find('>') else {
-                return Some(HtmlAdapter::Unsupported {
-                    raw: source.trim().to_string(),
-                });
-            };
-
-            let open_tag = &tag_start[..=open_end];
-            let after_open = &tag_start[open_end + 1..];
-            let Some(close_start) = after_open.find("</span>") else {
-                return Some(HtmlAdapter::Unsupported {
-                    raw: source.trim().to_string(),
-                });
-            };
-
-            let inner = &after_open[..close_start];
-            if inner.contains('<') {
-                return Some(HtmlAdapter::Unsupported {
-                    raw: source.trim().to_string(),
-                });
+    while !remaining.is_empty() {
+        if let Some(start) = remaining.find(['<', '$']) {
+            let before = &remaining[..start];
+            if !before.is_empty() {
+                nodes.push(HtmlNode::Text(before.to_string()));
             }
 
-            let (color, font_size_px) = parse_span_style(open_tag);
-            nodes.push(HtmlNode::StyledText(HtmlStyledText {
-                text: inner.to_string(),
-                color,
-                font_size_px,
-            }));
-            remaining = &after_open[close_start + "</span>".len()..];
-            saw_html = true;
+            let char_at = remaining.as_bytes()[start];
+            if char_at == b'<' {
+                let tag_start = &remaining[start..];
+                if tag_start.starts_with("<img") {
+                    if let Some(tag_end) = tag_start.find('>') {
+                        let tag = &tag_start[..=tag_end];
+                        if let Some(image) = parse_img_tag(tag) {
+                            nodes.push(HtmlNode::Image(image));
+                            remaining = &tag_start[tag_end + 1..];
+                            saw_special = true;
+                            continue;
+                        }
+                    }
+                } else if tag_start.starts_with("<span") {
+                    if let Some(open_end) = tag_start.find('>') {
+                        let open_tag = &tag_start[..=open_end];
+                        let after_open = &tag_start[open_end + 1..];
+                        if let Some(close_start) = after_open.find("</span>") {
+                            let inner = &after_open[..close_start];
+                            if !inner.contains('<') {
+                                let (color, font_size_px) = parse_span_style(open_tag);
+                                nodes.push(HtmlNode::StyledText(HtmlStyledText {
+                                    text: inner.to_string(),
+                                    color,
+                                    font_size_px,
+                                }));
+                                remaining = &after_open[close_start + "</span>".len()..];
+                                saw_special = true;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            } else if char_at == b'$' {
+                // Potential inline math
+                let math_start = &remaining[start..];
+                if !math_start.starts_with("$$") { // Avoid block math here
+                    let after_dollar = &math_start[1..];
+                    if let Some(close_idx) = find_closing_dollar(after_dollar) {
+                        let math_content = &after_dollar[..close_idx];
+                        nodes.push(HtmlNode::InlineMath(math_content.to_string()));
+                        remaining = &after_dollar[close_idx + 1..];
+                        saw_special = true;
+                        continue;
+                    }
+                }
+            }
+            
+            // If we didn't handle the special char, treat it as text
+            nodes.push(HtmlNode::Text(remaining[start..start+1].to_string()));
+            remaining = &remaining[start+1..];
+        } else {
+            nodes.push(HtmlNode::Text(remaining.to_string()));
+            break;
+        }
+    }
+
+    saw_special.then_some(HtmlAdapter::Adapted { nodes })
+}
+
+fn find_closing_dollar(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' {
+            index += 2;
             continue;
         }
-
-        return Some(HtmlAdapter::Unsupported {
-            raw: source.trim().to_string(),
-        });
+        if bytes[index] == b'$' {
+            if index > 0 {
+                return Some(index);
+            }
+        }
+        index += 1;
     }
-
-    if !remaining.is_empty() {
-        nodes.push(HtmlNode::Text(remaining.to_string()));
-    }
-
-    saw_html.then_some(HtmlAdapter::Adapted { nodes })
+    None
 }
 
 fn summarize_html_nodes(nodes: &[HtmlNode]) -> String {
@@ -1016,6 +1026,7 @@ fn summarize_html_nodes(nodes: &[HtmlNode]) -> String {
                 .or_else(|| image.src.clone())
                 .map(|label| format!("[image: {label}]"))
                 .unwrap_or_else(|| "[image]".to_string()),
+            HtmlNode::InlineMath(math) => format!("${}$", math),
         })
         .collect::<String>()
         .trim()

@@ -936,9 +936,15 @@ impl SolaRoot {
         }
     }
 
-    fn render_html_nodes(&self, nodes: &[HtmlNode], default_size: f32, default_color: &str, theme: &Theme) -> Div {
+    fn render_html_nodes(
+        &self,
+        nodes: &[HtmlNode],
+        default_size: f32,
+        default_color: &str,
+        theme: &Theme,
+    ) -> Div {
         nodes.iter().fold(
-            div().flex().flex_wrap().items_start().gap(px(0.0)),
+            div().flex().flex_wrap().items_center().gap(px(0.0)),
             |content, node| match node {
                 HtmlNode::Text(text) => content.child(
                     div()
@@ -963,6 +969,27 @@ impl SolaRoot {
                             .text_color(rgb_hex(color))
                             .child(styled.text.clone()),
                     )
+                }
+                HtmlNode::InlineMath(math) => {
+                    let cache_key = typst_cache_key(&RenderKind::Math, math);
+                    if let Some(TypstAdapter::Rendered { svg }) = self.typst_cache.get(&cache_key) {
+                        content.child(
+                            div().mx(px(4.0)).child(
+                                img(Arc::new(Image::from_bytes(
+                                    ImageFormat::Svg,
+                                    svg.as_bytes().to_vec(),
+                                )))
+                                .h(px(default_size * 1.3)),
+                            ),
+                        )
+                    } else {
+                        content.child(
+                            div()
+                                .text_size(px(default_size))
+                                .text_color(rgb_hex(&theme.palette.accent))
+                                .child(format!("${}$", math)),
+                        )
+                    }
                 }
                 HtmlNode::Image(image) => content.child(
                     div()
@@ -1031,21 +1058,35 @@ impl SolaRoot {
                 return;
             };
 
-            document
-                .blocks()
-                .iter()
-                .enumerate()
-                .filter_map(|(index, block)| {
-                    let Some(TypstAdapter::Pending) = block.typst.as_ref() else {
-                        return None;
-                    };
-
-                    typst_render_request(block).map(|(kind, source)| {
+            let mut reqs = Vec::new();
+            for (index, block) in document.blocks().iter().enumerate() {
+                // 1. Check for block-level math/typst
+                if matches!(block.typst, Some(TypstAdapter::Pending)) {
+                    if let Some((kind, source)) = typst_render_request(block) {
                         let cache_key = typst_cache_key(&kind, &source);
-                        (index, block.source.clone(), kind, source, cache_key)
-                    })
-                })
-                .collect::<Vec<_>>()
+                        reqs.push((index, block.source.clone(), kind, source, cache_key));
+                    }
+                }
+
+                // 2. Scan for inline math in html adapted nodes
+                if let Some(HtmlAdapter::Adapted { nodes }) = &block.html {
+                    for node in nodes {
+                        if let HtmlNode::InlineMath(source) = node {
+                            let cache_key = typst_cache_key(&RenderKind::Math, source);
+                            if !self.typst_cache.contains_key(&cache_key) {
+                                reqs.push((
+                                    index,
+                                    block.source.clone(),
+                                    RenderKind::Math,
+                                    source.clone(),
+                                    cache_key,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            reqs
         };
 
         for (index, block_source, kind, source, cache_key) in requests {
