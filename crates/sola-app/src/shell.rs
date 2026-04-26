@@ -576,7 +576,10 @@ impl SolaRoot {
             div()
                 .id("menu-mask")
                 .absolute()
+                .top(px(0.0))
+                .left(px(0.0))
                 .size_full()
+                .bg(gpui::hsla(0.0, 0.0, 0.0, 0.001))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| {
@@ -1707,6 +1710,8 @@ impl Render for SolaRoot {
         div()
             .size_full()
             .relative()
+            .flex()
+            .flex_col()
             .bg(rgb_hex(&theme.palette.app_background))
             .text_color(rgb_hex(&theme.palette.text_primary))
             .on_action(cx.listener(|this, _action: &Open, window, cx| {
