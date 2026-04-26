@@ -5,14 +5,15 @@ use crate::focused_editor::{
 };
 use crate::worktree::Worktree;
 use crate::workspace::Workspace;
+use crate::project_panel::ProjectPanel;
 use gpui::{
-    App, AppContext, Application, AsyncApp, Bounds, Context, Div, Entity, FocusHandle, FontWeight,
-    Hsla, Image, ImageFormat, InteractiveElement, IntoElement, ParentElement, Render,
+    AppContext, Application, AsyncApp, Bounds, Context, Div, Entity, FocusHandle, FontWeight, Hsla,
+ Image, ImageFormat, InteractiveElement, IntoElement, ParentElement, Render,
     StatefulInteractiveElement, Styled, WeakEntity, Window, WindowBounds, WindowOptions, div, img,
     px, rgb, size,
 };
 
-use sola_core::{APP_NAME, APP_TAGLINE, ROADMAP_PHASES, sample_markdown};
+use sola_core::{APP_NAME, APP_TAGLINE, sample_markdown};
 use sola_document::highlighter::SyntaxHighlighter;
 use sola_document::{BlockKind, DocumentBlock, DocumentModel, HtmlAdapter, HtmlNode, TypstAdapter};
 use sola_theme::{Theme, parse_hex_color};
@@ -65,6 +66,7 @@ struct SolaRoot {
     focus_handle: FocusHandle,
     this_handle: Option<WeakEntity<Self>>,
     workspace: Entity<Workspace>,
+    project_panel: Entity<ProjectPanel>,
     highlighter: SyntaxHighlighter,
     typst_cache: HashMap<String, TypstAdapter>,
     typst_in_flight: HashSet<String>,
@@ -83,6 +85,11 @@ impl SolaRoot {
     fn new(cx: &mut Context<Self>) -> Self {
         let worktree = Worktree::local(".", cx);
         let workspace = cx.new(|cx| Workspace::new(worktree, cx));
+        let project_panel = cx.new(|cx| ProjectPanel::new(workspace.clone(), cx));
+        let weak_panel = project_panel.downgrade();
+        project_panel.update(cx, |panel, cx| {
+            panel.set_handle(weak_panel, cx);
+        });
 
         // Sync initial document with sample markdown
         workspace.update(cx, |this, cx| {
@@ -104,6 +111,7 @@ impl SolaRoot {
             focus_handle: cx.focus_handle(),
             this_handle: None,
             workspace,
+            project_panel,
             highlighter: SyntaxHighlighter::new_rust(),
             typst_cache: HashMap::new(),
             typst_in_flight: HashSet::new(),
@@ -200,102 +208,6 @@ impl SolaRoot {
                     ))
                     .child(pill("roadmap", "phase 1 / 2 / 5".to_string(), theme)),
             )
-    }
-
-    fn render_sidebar(&self, cx: &mut App) -> Div {
-        let workspace = self.workspace.read(cx);
-        let theme = workspace.theme();
-        let document = workspace.document();
-
-        let outline = document.outline().iter().fold(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(section_title("Document outline", theme)),
-            |sidebar, entry| {
-                sidebar.child(
-                    div()
-                        .text_size(px(13.0))
-                        .text_color(rgb_hex(&theme.palette.text_muted))
-                        .pl(px((entry.level.saturating_sub(1) as f32) * 14.0))
-                        .child(format!("H{} · {}", entry.level, entry.title)),
-                )
-            },
-        );
-
-        let roadmap = ROADMAP_PHASES.iter().fold(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(section_title("Roadmap", theme)),
-            |sidebar, phase| {
-                sidebar.child(
-                    div()
-                        .text_size(px(13.0))
-                        .text_color(rgb_hex(&theme.palette.text_muted))
-                        .child(*phase),
-                )
-            },
-        );
-
-        div()
-            .w(px(320.0))
-            .h_full()
-            .flex()
-            .flex_col()
-            .gap(px(18.0))
-            .p(px(18.0))
-            .bg(rgb_hex(&theme.palette.panel_background))
-            .border_r_1()
-            .border_color(rgb_hex(&theme.palette.panel_border))
-            .child(self.render_stats_card(cx))
-            .child(outline)
-            .child(roadmap)
-    }
-
-    fn render_stats_card(&self, cx: &mut App) -> Div {
-        let workspace = self.workspace.read(cx);
-        let theme = workspace.theme();
-        let stats = workspace.document().stats();
-
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .p(px(16.0))
-            .bg(rgb_hex(&theme.palette.app_background))
-            .rounded(px(12.0))
-            .border_1()
-            .border_color(rgb_hex(&theme.palette.panel_border))
-            .child(section_title("Prototype status", theme))
-            .child(meta_line(
-                "blocks",
-                workspace.document().blocks().len().to_string(),
-                theme,
-            ))
-            .child(meta_line(
-                "headings",
-                stats.headings.to_string(),
-                theme,
-            ))
-            .child(meta_line(
-                "paragraphs",
-                stats.paragraphs.to_string(),
-                theme,
-            ))
-            .child(meta_line(
-                "lists",
-                stats.list_items.to_string(),
-                theme,
-            ))
-            .child(meta_line("quotes", stats.quotes.to_string(), theme))
-            .child(meta_line(
-                "code",
-                stats.code_blocks.to_string(),
-                theme,
-            ))
     }
 
     fn render_document_surface(&mut self, cx: &mut Context<Self>) -> Div {
@@ -1193,7 +1105,7 @@ impl Render for SolaRoot {
                             .size_full()
                             .flex()
                             .flex_row()
-                            .child(self.render_sidebar(cx))
+                            .child(self.project_panel.clone())
                             .child(self.render_document_surface(cx)),
                     ),
             )
@@ -1201,7 +1113,7 @@ impl Render for SolaRoot {
 }
 
 
-fn rgb_hex(hex: &str) -> Hsla {
+pub(crate) fn rgb_hex(hex: &str) -> Hsla {
     rgb(parse_hex_color(hex).unwrap_or(0xffffff)).into()
 }
 
@@ -1211,25 +1123,6 @@ fn section_title(title: &str, theme: &Theme) -> Div {
         .font_weight(FontWeight::BOLD)
         .text_color(rgb_hex(&theme.palette.text_primary))
         .child(title.to_string())
-}
-
-fn meta_line(label: &str, value: String, theme: &Theme) -> Div {
-    div()
-        .flex()
-        .justify_between()
-        .items_center()
-        .child(
-            div()
-                .text_size(px(13.0))
-                .text_color(rgb_hex(&theme.palette.text_muted))
-                .child(label.to_string()),
-        )
-        .child(
-            div()
-                .text_size(px(13.0))
-                .text_color(rgb_hex(&theme.palette.text_primary))
-                .child(value),
-        )
 }
 
 fn pill(label: &str, value: String, theme: &Theme) -> Div {

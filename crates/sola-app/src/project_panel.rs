@@ -1,0 +1,165 @@
+use gpui::{
+    App, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    Render, Styled, div, px, WeakEntity,
+};
+use crate::worktree::{Entry, WorktreeEvent};
+use crate::workspace::{Workspace, WorkspaceEvent};
+use std::collections::HashSet;
+use std::path::PathBuf;
+
+pub struct ProjectPanel {
+    workspace: Entity<Workspace>,
+    expanded_dirs: HashSet<PathBuf>,
+    this_handle: Option<WeakEntity<Self>>,
+}
+
+impl ProjectPanel {
+    pub fn new(workspace: Entity<Workspace>, _cx: &mut Context<Self>) -> Self {
+        Self {
+            workspace,
+            expanded_dirs: HashSet::new(),
+            this_handle: None,
+        }
+    }
+
+    pub fn set_handle(&mut self, handle: WeakEntity<Self>, cx: &mut Context<Self>) {
+        self.this_handle = Some(handle);
+        
+        cx.subscribe(&self.workspace, |_this, _workspace, event, cx| match event {
+            WorkspaceEvent::DocumentChanged | WorkspaceEvent::ThemeChanged => {
+                cx.notify();
+            }
+        })
+        .detach();
+
+        let worktree = self.workspace.read(cx).worktree().clone();
+        cx.subscribe(&worktree, |_this, _worktree, event, cx| match event {
+            WorktreeEvent::Updated => {
+                cx.notify();
+            }
+        })
+        .detach();
+    }
+
+    fn toggle_directory(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.expanded_dirs.contains(&path) {
+            self.expanded_dirs.remove(&path);
+        } else {
+            self.expanded_dirs.insert(path);
+        }
+        cx.notify();
+    }
+
+    fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.workspace.update(cx, |workspace, cx| {
+            workspace.open_file(path, cx);
+        });
+    }
+
+    fn visible_entries(&self, cx: &App) -> Vec<(usize, Entry)> {
+        let workspace = self.workspace.read(cx);
+        let worktree = workspace.worktree().read(cx);
+        let mut visible = Vec::new();
+        self.collect_visible(worktree.entries(), 0, &mut visible);
+        visible
+    }
+
+    fn collect_visible(&self, entries: &[Entry], depth: usize, out: &mut Vec<(usize, Entry)>) {
+        for entry in entries {
+            out.push((depth, entry.clone()));
+            if entry.is_dir && self.expanded_dirs.contains(&entry.path) {
+                // Future optimization: Recursive scan on expand.
+            }
+        }
+    }
+}
+
+impl Render for ProjectPanel {
+    fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = self.workspace.read(cx).theme().clone();
+        let entries = self.visible_entries(cx);
+        let this_handle = self.this_handle.clone();
+        let expanded_dirs = self.expanded_dirs.clone();
+
+        div()
+            .w(px(300.0))
+            .h_full()
+            .bg(crate::shell::rgb_hex(&theme.palette.panel_background))
+            .border_r_1()
+            .border_color(crate::shell::rgb_hex(&theme.palette.panel_border))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .p(px(16.0))
+                    .text_size(px(14.0))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(crate::shell::rgb_hex(&theme.palette.text_primary))
+                    .child("PROJECT"),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .child(
+                        if let Some(this_handle) = this_handle {
+                            div().flex_1().child(
+                                gpui::list(
+                                    gpui::ListState::new(
+                                        entries.len(),
+                                        gpui::ListAlignment::Top,
+                                        px(100.0),
+                                    ),
+                                    move |idx, _window, _cx| {
+                                        let (depth, entry) = &entries[idx];
+                                        let is_expanded = expanded_dirs.contains(&entry.path);
+                                        let is_dir = entry.is_dir;
+                                        let name = entry.name.clone();
+                                        let path = entry.path.clone();
+                                        let text_color = crate::shell::rgb_hex(if is_dir { &theme.palette.accent } else { &theme.palette.text_muted });
+                                        let item_text_color = crate::shell::rgb_hex(&theme.palette.text_primary);
+                                        let hover_bg = crate::shell::rgb_hex(&theme.palette.code_background);
+                                        let this_handle = this_handle.clone();
+
+                                        div()
+                                            .px(px(16.0))
+                                            .pl(px(16.0 + (*depth as f32) * 12.0))
+                                            .py(px(4.0))
+                                            .hover(move |s| s.bg(hover_bg))
+                                            .on_mouse_down(gpui::MouseButton::Left, move |_event, _window, cx| {
+                                                let _ = this_handle.update(cx, |this, cx| {
+                                                    if is_dir {
+                                                        this.toggle_directory(path.clone(), cx);
+                                                    } else {
+                                                        this.open_file(path.clone(), cx);
+                                                    }
+                                                });
+                                            })
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .gap(px(6.0))
+                                                    .items_center()
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(12.0))
+                                                            .text_color(text_color)
+                                                            .child(if is_dir { if is_expanded { "▼" } else { "▶" } } else { "📄" })
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(13.0))
+                                                            .text_color(item_text_color)
+                                                            .child(name)
+                                                    )
+                                            )
+                                            .into_any_element()
+                                    }
+                                )
+                            )
+                        } else {
+                            div()
+                        }
+                    )
+            )
+    }
+}
