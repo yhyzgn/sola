@@ -926,102 +926,125 @@ impl SolaRoot {
 
         self.workspace.update(cx, |workspace, cx| {
             let theme = workspace.theme().clone();
-            workspace.update_document(cx, |document| {
+
             if primary && modifiers.shift && key.eq_ignore_ascii_case("z") {
-                return document.redo();
+                return workspace.update_document(cx, |doc| doc.redo());
             }
 
             if primary && key.eq_ignore_ascii_case("y") {
-                return document.redo();
+                return workspace.update_document(cx, |doc| doc.redo());
             }
 
             if primary && key.eq_ignore_ascii_case("z") {
-                return document.undo();
+                return workspace.update_document(cx, |doc| doc.undo());
             }
 
             if modifiers.alt && key.eq_ignore_ascii_case("up") {
-                if document.focused_has_draft() {
-                    document.apply_focused_draft();
-                }
-                return document.focus_previous();
+                return workspace.update_document(cx, |doc| {
+                    if doc.focused_has_draft() {
+                        doc.apply_focused_draft();
+                    }
+                    doc.focus_previous()
+                });
             }
 
             if modifiers.alt && key.eq_ignore_ascii_case("down") {
-                if document.focused_has_draft() {
-                    document.apply_focused_draft();
-                }
-                return document.focus_next();
+                return workspace.update_document(cx, |doc| {
+                    if doc.focused_has_draft() {
+                        doc.apply_focused_draft();
+                    }
+                    doc.focus_next()
+                });
             }
 
             if key.eq_ignore_ascii_case("left") {
-                return document.move_cursor_left(modifiers.shift);
+                return workspace.update_document(cx, |doc| doc.move_cursor_left(modifiers.shift));
             }
 
             if key.eq_ignore_ascii_case("right") {
-                return document.move_cursor_right(modifiers.shift);
+                return workspace.update_document(cx, |doc| doc.move_cursor_right(modifiers.shift));
             }
 
             if key.eq_ignore_ascii_case("up") {
-                if let Some(target) = self.soft_wrapped_vertical_target(-1, document, &theme, window) {
-                    return document.set_focused_cursor(target, modifiers.shift);
-                }
-                return document.move_cursor_up(modifiers.shift);
+                return workspace.update_document(cx, |doc| {
+                    if let Some(target) = self.soft_wrapped_vertical_target(-1, doc, &theme, window) {
+                        return doc.set_focused_cursor(target, modifiers.shift);
+                    }
+                    doc.move_cursor_up(modifiers.shift)
+                });
             }
 
             if key.eq_ignore_ascii_case("down") {
-                if let Some(target) = self.soft_wrapped_vertical_target(1, document, &theme, window) {
-                    return document.set_focused_cursor(target, modifiers.shift);
-                }
-                return document.move_cursor_down(modifiers.shift);
+                return workspace.update_document(cx, |doc| {
+                    if let Some(target) = self.soft_wrapped_vertical_target(1, doc, &theme, window) {
+                        return doc.set_focused_cursor(target, modifiers.shift);
+                    }
+                    doc.move_cursor_down(modifiers.shift)
+                });
             }
 
             if key.eq_ignore_ascii_case("home") {
-                if let Some(target) = self.visual_line_edge_offset(document, &theme, window, false) {
-                    return document.set_focused_cursor(target, modifiers.shift);
-                }
+                return workspace.update_document(cx, |doc| {
+                    if let Some(target) = self.visual_line_edge_offset(doc, &theme, window, false) {
+                        return doc.set_focused_cursor(target, modifiers.shift);
+                    }
+                    false
+                });
             }
 
             if key.eq_ignore_ascii_case("end") {
-                if let Some(target) = self.visual_line_edge_offset(document, &theme, window, true) {
-                    return document.set_focused_cursor(target, modifiers.shift);
-                }
+                return workspace.update_document(cx, |doc| {
+                    if let Some(target) = self.visual_line_edge_offset(doc, &theme, window, true) {
+                        return doc.set_focused_cursor(target, modifiers.shift);
+                    }
+                    false
+                });
             }
 
             if primary && key.eq_ignore_ascii_case("a") {
-                document.select_all();
-                return true;
+                return workspace.update_document(cx, |doc| {
+                    doc.select_all();
+                    true
+                });
             }
 
             if primary && key.eq_ignore_ascii_case("n") {
-                return document.insert_paragraph_after_focused(
-                    "Inserted via keyboard shortcut as a structure-editing prototype.",
-                );
+                return workspace.update_document(cx, |doc| {
+                    doc.insert_paragraph_after_focused(
+                        "Inserted via keyboard shortcut as a structure-editing prototype.",
+                    )
+                });
             }
 
             if primary && key.eq_ignore_ascii_case("d") {
-                return document.duplicate_focused_block();
+                return workspace.update_document(cx, |doc| doc.duplicate_focused_block());
             }
 
             if primary && key.eq_ignore_ascii_case("backspace") {
-                return document.delete_focused_block();
+                return workspace.update_document(cx, |doc| doc.delete_focused_block());
             }
 
             if primary && key.eq_ignore_ascii_case("s") {
-                document.apply_focused_draft();
+                workspace.update_document(cx, |doc| {
+                    doc.apply_focused_draft();
+                });
+                workspace.save_current_file(cx);
                 return true;
             }
 
             if key.eq_ignore_ascii_case("escape") {
-                document.revert_focused_draft();
-                return true;
+                return workspace.update_document(cx, |doc| {
+                    doc.revert_focused_draft();
+                    true
+                });
             }
 
             if key.eq_ignore_ascii_case("backspace") {
-                return document.delete_at_cursor_in_focused_draft();
+                return workspace.update_document(cx, |doc| doc.delete_at_cursor_in_focused_draft());
             }
 
             if key.eq_ignore_ascii_case("enter") {
-                return document.push_char_to_focused_draft('\n');
+                return workspace.update_document(cx, |doc| doc.push_char_to_focused_draft('\n'));
             }
 
             if !modifiers.control && !modifiers.alt && !modifiers.platform {
@@ -1029,14 +1052,13 @@ impl SolaRoot {
                     let mut chars = ch.chars();
                     if let Some(single) = chars.next() {
                         if chars.next().is_none() {
-                            return document.push_char_to_focused_draft(single);
+                            return workspace.update_document(cx, |doc| doc.push_char_to_focused_draft(single));
                         }
                     }
                 }
             }
 
             false
-            })
         })
     }
 

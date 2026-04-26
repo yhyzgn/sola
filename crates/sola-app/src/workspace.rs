@@ -105,4 +105,15 @@ impl Workspace {
             cx.notify();
         }
     }
+
+    pub fn save_current_file(&mut self, cx: &mut Context<Self>) {
+        if let Some(path) = &self.current_path {
+            let content = self.document.source();
+            if let Ok(_) = std::fs::write(path, content) {
+                // We could emit a specific 'Saved' event, but for now just notify
+                cx.emit(WorkspaceEvent::DocumentChanged);
+                cx.notify();
+            }
+        }
+    }
 }

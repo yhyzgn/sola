@@ -60,7 +60,11 @@ impl ProjectPanel {
         let workspace = self.workspace.read(cx);
         let worktree = workspace.worktree().read(cx);
         let mut visible = Vec::new();
-        self.collect_visible(worktree.entries(), 0, &mut visible);
+        if let Some(root) = worktree.root_entry() {
+            if let Some(children) = &root.children {
+                self.collect_visible(children, 0, &mut visible);
+            }
+        }
         visible
     }
 
@@ -68,7 +72,9 @@ impl ProjectPanel {
         for entry in entries {
             out.push((depth, entry.clone()));
             if entry.is_dir && self.expanded_dirs.contains(&entry.path) {
-                // Future optimization: Recursive scan on expand.
+                if let Some(children) = &entry.children {
+                    self.collect_visible(children, depth + 1, out);
+                }
             }
         }
     }
