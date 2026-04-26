@@ -1,50 +1,31 @@
-# GPUI 原生编辑器重构计划 - 迈向 Zed 级性能与体验
+# Sola 主编辑区虚拟化重构计划 (Phase 5 - 极限性能)
 
-## 1. 背景与动机
-当前的 Focused 编辑区采用基于 `flex + span Div` 的“片段拼接”方案。虽然在原型期能工作，但在处理长行软换行、光标精确绘制、选区性能以及交互一致性上存在天然瓶颈。
+## 1. 症状描述
+用户反馈：即使将文件加载过程移至后台，打开长文件后依然会经历长达 10 秒的严重卡顿。这说明瓶颈并不在磁盘 I/O 或 Markdown 解析，而在于**视图层的全量渲染**。
 
-参考 **Zed** 的实现，GPUI 最正宗的编辑器实现方式是使用 **自定义 Element (`gpui::Element`)**，在 `Paint` 阶段直接操作 `TextSystem`。
+## 2. 根因分析
+目前的 `render_document_surface` 方法使用了极度低效的 `fold` 策略：
+```rust
+let blocks = document.blocks().iter().enumerate().fold(
+    div(),
+    |surface, (index, block)| surface.child(self.render_block(index, block, cx)),
+);
+```
+这意味着如果一个文档有 500 个段落/公式/代码块，应用会在**每一帧**尝试构建和排版 500 个复杂的 DOM 子树！这在任何 UI 框架中都是灾难性的性能黑洞，是导致 10s 假死的绝对元凶。
 
-## 2. 核心架构目标
-- **单一 Element 驱动**：Focused Block 的文本不再由数百个 `Div` 组成，而是通过一个自定义的 `FocusedEditorElement` 一次性完成渲染。
-- **TextLayout 核心**：利用 `WrappedLine` 缓存布局结果，支持高性能的软换行计算。
-- **自定义绘制层**：按顺序手动绘制：
-  1. 选区背景 (Selection Quads)
-  2. 文本内容 (Shaped Glyphs)
-  3. 光标 (Caret Quad)
-- **解耦高亮逻辑**：将语法高亮转化为 `TextRun` 列表，不再参与 UI 树构建。
+## 3. 彻底修复方案
 
-## 3. 实施步骤
+### A. 引入真正的 GPUI 虚拟列表 (Virtualization)
+如同我们在 `ProjectPanel` 侧边栏中所做的那样，必须将主编辑区重构为 `gpui::list`：
+- **按需渲染**：无论文档有多少个 `DocumentBlock`，只渲染屏幕内可见的几个块。内存占用从 $O(N)$ 降为 $O(1)$，渲染时间从数百毫秒降至不到 1 毫秒。
+- **状态托管**：在 `SolaRoot` 或相关状态中维护 `gpui::ListState`。
 
-### 阶段一：基础设施构建 (focused_editor.rs)
-1. **定义 `FocusedEditorElement`**：实现 `gpui::Element` trait。
-2. **状态集成**：使 Element 持有 `DocumentModel` 中关于该块的源码、光标和选区状态。
-3. **Layout 逻辑**：
-   - 将 `SyntaxHighlighter` 的输出映射为 `Vec<TextRun>`。
-   - 调用 `shape_text` 获取并缓存 `WrappedLine`。
-   - 根据 `WrappedLine` 汇报准确的 `size` 给 GPUI。
+### B. 优化 Typst 触发风暴 (Batch Updates)
+在 `trigger_typst_renders` 中，对于已经存在于 `typst_cache` 中的数百个公式，之前的代码会触发几百个循环的 `cx.notify()`：
+- **批量更新**：将循环内的 `cx.notify()` 移除。在收集完所有命中的缓存并更新完 `document` 后，在循环外统一调用一次 `cx.notify()`。
 
-### 阶段二：绘制管线 (Painting)
-1. **实现选区绘制**：
-   - 利用 `line.x_for_index` 获取像素偏移。
-   - 绘制半透明矩形覆盖选区范围。
-2. **实现文本绘制**：
-   - 直接调用 `line.paint`，利用 GPUI 底层的高性能字形渲染。
-3. **实现光标绘制**：
-   - 计算光标偏移位置，绘制带有闪烁逻辑（由 Root View 驱动）的绝对定位矩形。
-
-### 阶段三：交互升级 (Hit-testing)
-1. **重写点击定位**：
-   - 彻底废弃 `clickable_chars`。
-   - 在 Element 的 `on_mouse_event` 中使用 `line.closest_index_for_position` 计算偏移。
-2. **实现拖拽选区**：
-   - 基于统一的 `Element` 坐标系，轻松实现鼠标拖拽扩展选区。
-
-### 阶段四：清理与收口 (shell.rs)
-1. **移除旧代码**：删除 `render_highlighted_text`、`render_span_fragment` 等片段拼接逻辑。
-2. **挂载 Element**：在 `SolaRoot::render_block` 中直接使用 `FocusedEditorElement`。
-
-## 4. 预期收益
-- **极速渲染**：UI 节点数减少 90% 以上。
-- **像素级精确**：光标和选区不再有 1px 的对齐抖动。
-- ** Zed 级体验**：完全对齐 Zed 的编辑器排版表现，为后续的 inline formula 原生排版打下基础。
+## 4. 实施步骤
+1. **状态改造**：在 `SolaRoot` 或某个包装结构中引入 `ListState`（或者直接在 `render` 中构建无状态的 `gpui::list` 实例，如果不需要保持滚动状态）。*注意：为了保持正确的滚动位置，最好在切换 Tab 时更新或持有每个文档的滚动状态。如果追求最快修复，可先临时在渲染时构建。*
+2. **重构 Surface**：彻底删除 `blocks` 的 `fold` 循环。用 `gpui::list` 包裹 `self.render_block` 调用。
+3. **消除风暴**：重构 `trigger_typst_renders`，消灭高频同步重绘。
+4. **终极验证**：用包含数百行内容的真实超大 Markdown 测试，验证能否真正实现瞬间打开（秒开）和 60 帧丝滑滚动。

@@ -229,6 +229,14 @@ impl DocumentModel {
         true
     }
 
+    pub fn update_block_typst(&mut self, index: usize, adapter: TypstAdapter) -> bool {
+        if let Some(block) = self.blocks.get_mut(index) {
+            block.typst = Some(adapter);
+            return true;
+        }
+        false
+    }
+
     pub fn focused_text(&self) -> Option<&str> {
         let block = self.focused_block_ref()?;
         Some(block.draft.as_deref().unwrap_or(&block.source))

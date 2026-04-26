@@ -46,6 +46,7 @@ pub struct SolaRoot {
     cursor_blink_started: bool,
     active_menu: Option<&'static str>,
     active_submenu: Option<&'static str>,
+    document_list_state: gpui::ListState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +83,12 @@ impl SolaRoot {
         })
         .detach();
 
+        let document_list_state = gpui::ListState::new(
+            0,
+            gpui::ListAlignment::Top,
+            px(1000.0),
+        );
+
         let mut this = Self {
             focus_handle: cx.focus_handle(),
             this_handle: None,
@@ -94,6 +101,7 @@ impl SolaRoot {
             cursor_blink_started: false,
             active_menu: None,
             active_submenu: None,
+            document_list_state,
         };
 
         this.trigger_typst_renders(cx);
@@ -794,10 +802,8 @@ impl SolaRoot {
         let document = active_doc_opt.unwrap();
         self.ensure_cursor_blink_loop(cx);
 
-        let blocks = document.blocks().iter().enumerate().fold(
-            div().flex().flex_col().gap(px(14.0)).p(px(24.0)),
-            |surface, (index, block)| surface.child(self.render_block(index, block, cx)),
-        );
+        self.document_list_state.reset(document.block_count());
+        let weak_handle = cx.weak_entity();
 
         let previous_button = {
             let workspace = self.workspace.clone();
@@ -987,7 +993,26 @@ impl SolaRoot {
                                             .child(redo_button),
                                     ),
                             )
-                            .child(blocks)
+                            .child(
+                                div()
+                                    .mt(px(16.0))
+                                    .flex_1()
+                                    .child(gpui::list(self.document_list_state.clone(), move |idx, _window, cx| {
+                                        let weak_handle = weak_handle.clone();
+                                        weak_handle.update(cx, |this, cx| {
+                                            let workspace = this.workspace.read(cx);
+                                            let theme = workspace.theme();
+                                            let Some(doc) = workspace.active_document_ref() else {
+                                                return div().into_any_element();
+                                            };
+                                            let Some(block) = doc.blocks().get(idx) else {
+                                                return div().into_any_element();
+                                            };
+                                            
+                                            this.render_block(idx, block, doc, theme, weak_handle.clone()).into_any_element()
+                                        }).unwrap_or_else(|_| div().into_any_element())
+                                    }).size_full())
+                            )
                             .child(
                                 div()
                                     .mt(px(24.0))
@@ -1005,13 +1030,10 @@ impl SolaRoot {
         &self,
         index: usize,
         block: &DocumentBlock,
-        cx: &mut Context<Self>,
+        document: &DocumentModel,
+        theme: &Theme,
+        this_handle: WeakEntity<Self>,
     ) -> impl IntoElement {
-        let workspace = self.workspace.read(cx);
-        let theme = workspace.theme();
-        let Some(document) = workspace.active_document_ref() else {
-            return div().into_any_element();
-        };
         let is_focused = document.focused_block() == index;
 
         let block_container = div()
@@ -1040,67 +1062,76 @@ impl SolaRoot {
             let selection_color = rgb_hex(&theme.palette.selection);
             let cursor_color = rgb_hex(&theme.palette.cursor);
 
-            if let Some(this_handle) = self.this_handle.clone() {
-                div().flex_1().child(
-                    div()
-                        .bg(rgb_hex(&theme.palette.code_background))
-                        .rounded(px(8.0))
-                        .child(
-                            FocusedEditorElement::new(
-                                text,
-                                editor_style,
-                                runs,
-                                document.focused_cursor().cloned(),
-                                self.cursor_visible,
-                                selection_color,
-                                cursor_color,
-                            )
-                            .on_cursor_move(move |offset, shift, window, cx| {
-                                let _ = this_handle.update(cx, |this, cx| {
-                                    this.workspace.update(cx, |workspace, cx| {
-                                        window.focus(&this.focus_handle);
-                                        this.cursor_visible = true;
-                                        workspace.update_active_document(cx, |doc| {
-                                            doc.set_focused_cursor(offset, shift);
-                                        });
+            let on_cursor_handle = this_handle.clone();
+            let cursor_state = document.focused_cursor().cloned();
+            let focus_handle = self.focus_handle.clone();
+
+            div().flex_1().child(
+                div()
+                    .bg(rgb_hex(&theme.palette.code_background))
+                    .rounded(px(8.0))
+                    .child(
+                        FocusedEditorElement::new(
+                            text,
+                            editor_style,
+                            runs,
+                            cursor_state,
+                            self.cursor_visible,
+                            selection_color,
+                            cursor_color,
+                        )
+                        .on_cursor_move(move |offset, shift, window, cx| {
+                            let _ = on_cursor_handle.update(cx, |this, cx| {
+                                this.workspace.update(cx, |workspace, cx| {
+                                    window.focus(&focus_handle);
+                                    this.cursor_visible = true;
+                                    workspace.update_active_document(cx, |doc| {
+                                        doc.set_focused_cursor(offset, shift);
                                     });
                                 });
-                            }),
-                        ),
-                )
-            } else {
-                div().flex_1()
-            }
+                            });
+                        }),
+                    ),
+            )
         } else {
-            div().flex_1().child(self.render_blurred_content(block, theme))
+            div()
+                .flex_1()
+                .child(self.render_blurred_content(block, theme))
         };
+
+        let click_handle = this_handle.clone();
+        let focused_block_idx = document.focused_block();
+        let has_draft = document.focused_has_draft();
+        let focus_handle = self.focus_handle.clone();
 
         block_container
             .on_mouse_down(
                 gpui::MouseButton::Left,
-                cx.listener(move |this, _event, window, cx| {
-                    this.workspace.update(cx, |workspace, cx| {
-                        workspace.update_active_document(cx, |doc| {
-                            let plan = plan_block_click(
-                                doc.focused_block(),
-                                index,
-                                doc.focused_has_draft(),
-                            );
+                move |_, window, cx| {
+                    let _ = click_handle.update(cx, |this, cx| {
+                        this.workspace.update(cx, |workspace, cx| {
+                            workspace.update_active_document(cx, |doc| {
+                                let plan = plan_block_click(
+                                    focused_block_idx,
+                                    index,
+                                    has_draft,
+                                );
 
-                            if plan.apply_draft {
-                                doc.apply_focused_draft();
-                            }
+                                if plan.apply_draft {
+                                    doc.apply_focused_draft();
+                                }
 
-                            if plan.switch_block_focus {
-                                doc.focus_block(index);
-                            }
+                                if plan.switch_block_focus {
+                                    doc.focus_block(index);
+                                }
 
-                            if plan.refresh_window_focus {
-                                window.focus(&this.focus_handle);
-                            }
+                                if plan.refresh_window_focus {
+                                    window.focus(&focus_handle);
+                                }
+                            });
                         });
                     });
-                }),
+                },
             )
             .child(indicator)
             .child(content)
@@ -1481,13 +1512,21 @@ impl SolaRoot {
             reqs
         };
 
+        let mut processed_cache_keys = HashSet::new();
         for (index, block_source, kind, source, cache_key) in requests {
-            if let Some(cached) = self.typst_cache.get(&cache_key).cloned() {
-                self.workspace.update(cx, |workspace, cx| {
-                    workspace.update_active_document(cx, |document| {
-                        apply_cached_typst_adapter(document, &cache_key, cached);
+            if self.typst_cache.contains_key(&cache_key) && !processed_cache_keys.contains(&cache_key) {
+                if let Some(cached) = self.typst_cache.get(&cache_key).cloned() {
+                    self.workspace.update(cx, |workspace, cx| {
+                        workspace.update_active_document(cx, |document| {
+                            apply_cached_typst_adapter(document, &cache_key, cached);
+                        });
                     });
-                });
+                    processed_cache_keys.insert(cache_key.clone());
+                }
+                continue;
+            }
+
+            if self.typst_cache.contains_key(&cache_key) {
                 continue;
             }
 
@@ -2099,38 +2138,38 @@ fn apply_cached_typst_adapter(
     cache_key: &str,
     adapter: TypstAdapter,
 ) -> usize {
-    let previous_focus = document.focused_block();
+    let mut updated = 0;
     let mut targets = Vec::new();
 
     for (index, block) in document.blocks().iter().enumerate() {
-        if !matches!(block.typst, Some(TypstAdapter::Pending)) {
-            continue;
+        // Block-level
+        if matches!(block.typst, Some(TypstAdapter::Pending)) {
+            if let Some((kind, source)) = typst_render_request(block) {
+                if typst_cache_key(&kind, &source) == cache_key {
+                    targets.push(index);
+                }
+            }
         }
 
-        let Some((kind, source)) = typst_render_request(block) else {
-            continue;
-        };
-
-        if typst_cache_key(&kind, &source) == cache_key {
-            targets.push(index);
+        // Inline-level (even if not Pending, we may update it)
+        if let Some(HtmlAdapter::Adapted { nodes }) = &block.html {
+            for node in nodes {
+                if let HtmlNode::InlineMath(source) = node {
+                    if typst_cache_key(&RenderKind::Math, source) == cache_key {
+                        targets.push(index);
+                        break;
+                    }
+                }
+            }
         }
     }
 
-    let mut updated = 0;
     for index in targets {
-        if !document.focus_block(index) {
-            continue;
-        }
-
-        if let Some(block) = document.focused_block_mut()
-            && apply_typst_adapter(block, adapter.clone())
-        {
+        if document.update_block_typst(index, adapter.clone()) {
             updated += 1;
         }
     }
 
-    let restore_index = previous_focus.min(document.block_count().saturating_sub(1));
-    let _ = document.focus_block(restore_index);
     updated
 }
 
