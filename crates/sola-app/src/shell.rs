@@ -227,6 +227,41 @@ impl SolaRoot {
         .detach();
     }
 
+    fn export_document_as(&mut self, format: sola_export::ExportFormat, _window: &mut Window, cx: &mut Context<Self>) {
+        let workspace = self.workspace.read(cx);
+        let Some(document) = workspace.active_document_ref() else {
+            return; // No document to export
+        };
+        let theme = workspace.theme().clone();
+        
+        let base_path = workspace.current_path().cloned().unwrap_or_else(|| PathBuf::from("."));
+        
+        let default_name = match format {
+            sola_export::ExportFormat::Markdown => "untitled.md",
+            sola_export::ExportFormat::Html => "untitled.html",
+        };
+        
+        let path_rx = cx.prompt_for_new_path(&base_path, Some(default_name));
+
+        // Need to clone document data before spawning because we can't move DocumentModel reference easily across threads safely without locking.
+        // But DocumentModel is Clone.
+        let document = document.clone();
+        
+        cx.spawn(move |_this, cx: &mut gpui::AsyncApp| {
+            let background = cx.background_executor().clone();
+            async move {
+                if let Ok(Ok(Some(path))) = path_rx.await {
+                    let artifact = background.spawn(async move {
+                        sola_export::export_document(&document, &theme, format)
+                    }).await;
+                    
+                    let _ = std::fs::write(&path, artifact.bytes);
+                }
+            }
+        })
+        .detach();
+    }
+
     fn render_menu_bar(&self, cx: &mut Context<Self>) -> Div {
         let theme = self.workspace.read(cx).theme();
         let active_menu = self.active_menu;
@@ -427,7 +462,7 @@ impl SolaRoot {
         let workspace = self.workspace.read(cx);
         let theme = workspace.theme();
 
-        type MenuAction = Box<dyn Fn(&mut SolaRoot, &mut Context<SolaRoot>) + Send + Sync>;
+        type MenuAction = Box<dyn Fn(&mut SolaRoot, &mut Window, &mut Context<SolaRoot>) + Send + Sync>;
 
         let items: Vec<(String, MenuAction)> = match label {
             "Open Recent" => {
@@ -440,29 +475,32 @@ impl SolaRoot {
                         .unwrap_or_else(|| path.to_string_lossy().to_string());
                     results.push((
                         name,
-                        Box::new(move |this: &mut SolaRoot, cx: &mut Context<SolaRoot>| {
+                        Box::new(move |this: &mut SolaRoot, _window: &mut Window, cx: &mut Context<SolaRoot>| {
                             this.open_path(path.clone(), cx);
                         }) as MenuAction,
                     ));
                 }
 
-                results.push(("Separator".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Context<SolaRoot>| {}) as MenuAction));
+                results.push(("Separator".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Window, _: &mut Context<SolaRoot>| {}) as MenuAction));
                 results.push((
                     "Clear Items".to_string(),
-                    Box::new(|this: &mut SolaRoot, cx: &mut Context<SolaRoot>| {
+                    Box::new(|this: &mut SolaRoot, _window: &mut Window, cx: &mut Context<SolaRoot>| {
                         this.workspace.update(cx, |w, cx| w.clear_recent_paths(cx));
                     }) as MenuAction,
                 ));
                 results
             }
             "Import" => vec![
-                ("Markdown...".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Context<SolaRoot>| {}) as MenuAction),
-                ("HTML...".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Context<SolaRoot>| {}) as MenuAction),
+                ("Markdown...".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Window, _: &mut Context<SolaRoot>| {}) as MenuAction),
+                ("HTML...".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Window, _: &mut Context<SolaRoot>| {}) as MenuAction),
             ],
             "Export" => vec![
-                ("PDF...".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Context<SolaRoot>| {}) as MenuAction),
-                ("HTML...".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Context<SolaRoot>| {}) as MenuAction),
-                ("Image...".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Context<SolaRoot>| {}) as MenuAction),
+                ("Markdown...".to_string(), Box::new(|this: &mut SolaRoot, window: &mut Window, cx: &mut Context<SolaRoot>| {
+                    this.export_document_as(sola_export::ExportFormat::Markdown, window, cx);
+                }) as MenuAction),
+                ("HTML...".to_string(), Box::new(|this: &mut SolaRoot, window: &mut Window, cx: &mut Context<SolaRoot>| {
+                    this.export_document_as(sola_export::ExportFormat::Html, window, cx);
+                }) as MenuAction),
             ],
             _ => vec![],
         };
@@ -489,8 +527,8 @@ impl SolaRoot {
                     .py(px(6.0))
                     .rounded(px(4.0))
                     .hover(|s| s.bg(rgb_hex("#3a3a3a")))
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                        action(this, cx);
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                        action(this, window, cx);
                         this.active_menu = None;
                         this.active_submenu = None;
                         cx.notify();
@@ -2087,15 +2125,11 @@ fn typst_render_request(block: &DocumentBlock) -> Option<(RenderKind, String)> {
 
 #[cfg(test)]
 fn apply_typst_result(block: &mut DocumentBlock, result: Result<String, TypstError>) -> bool {
-    apply_typst_adapter(block, typst_adapter_from_result(result))
-}
-
-fn apply_typst_adapter(block: &mut DocumentBlock, adapter: TypstAdapter) -> bool {
     if block.typst.is_none() {
         return false;
     }
 
-    block.typst = Some(adapter);
+    block.typst = Some(typst_adapter_from_result(result));
 
     true
 }

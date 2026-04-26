@@ -5603,6 +5603,7 @@ dependencies = [
  "serde_json",
  "sola-core",
  "sola-document",
+ "sola-export",
  "sola-theme",
  "sola-typst",
  "tokio",

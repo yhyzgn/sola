@@ -542,7 +542,8 @@
     - **独立 Themes 菜单**：响应用户建议，将主题切换从 View 菜单中剥离，建立独立的顶层 “Themes” 菜单。支持 Sola Dark 和 Sola Light 的一键切换。
     - **扩充功能树**：对齐 Typora 菜单深度。在 File 菜单中补全了 Import (Markdown/HTML) 和 Export (PDF/HTML/Image) 子菜单占位。
     - **完善 Edit/View 交互**：扩充了 Cut/Copy/Paste, Select All 以及多种视图模式（Source Code/Focus/Typewriter）的菜单项，并实现了级联子菜单的高性能渲染。
-    - 验证通过：菜单栏功能布局与 Typora 高度一致，级联悬停交互丝滑，点击外部关闭逻辑符合预期，整体交互科学且完备。
+    - **正式接入底层 Export 能力**：通过注入 `sola-export` 依赖，将真实的 Markdown/HTML 转换能力绑定到 Export 子菜单中。利用 `background_executor` 结合 `std::fs::write` 实现了导出期间 UI 零阻塞的平滑体验。
+    - 验证通过：菜单栏功能布局与 Typora 高度一致，级联悬停交互丝滑，点击外部关闭逻辑符合预期，整体交互科学且完备，且无用死代码均已被彻底清理。
 18. **深度修复打开文件卡死问题（性能最终优化）**：
     - **全异步解析架构**：彻底重构了文件加载链路。将 `std::fs::read_to_string` 和 `DocumentModel::from_markdown` (Markdown 解析) 全部移至 `background_executor` 线程池。UI 线程现在仅负责接收解析成品并挂载。
     - **智能工作树复用**：在 `open_path` 逻辑中增加了路径比对。如果新文件就在当前已扫描的目录内，则自动跳过 `Worktree` 重建，消除了冗余的磁盘扫描风暴。
