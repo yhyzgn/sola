@@ -5,12 +5,13 @@ use crate::focused_editor::{
     visual_line_ranges,
 };
 use crate::project_panel::ProjectPanel;
-use crate::workspace::Workspace;
+use crate::workspace::{Workspace, WorkspaceEvent};
 use crate::worktree::Worktree;
+use gpui::prelude::{FluentBuilder, StatefulInteractiveElement, Styled};
 use gpui::{
     AppContext, Application, AsyncApp, Bounds, Context, Div, Entity, FocusHandle, FontWeight, Hsla,
     Image, ImageFormat, InteractiveElement, IntoElement, KeyBinding, Menu, MenuItem, MouseButton,
-    ParentElement, Render, StatefulInteractiveElement, Styled, WeakEntity, Window,
+    ParentElement, Render, WeakEntity, Window,
     WindowBounds, WindowOptions, div, img, px, rgb, size,
 };
 
@@ -31,80 +32,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub fn run() {
-    #[cfg(target_os = "linux")]
-    if let Err(message) = ensure_linux_display_backend() {
-        eprintln!("{message}");
-        return;
-    }
-
-    Application::new().run(|cx| {
-        cx.set_menus(vec![
-            Menu {
-                name: "Sola".into(),
-                items: vec![MenuItem::action("Quit", Quit)],
-            },
-            Menu {
-                name: "File".into(),
-                items: vec![
-                    MenuItem::action("Open...", Open),
-                    MenuItem::action("Save", Save),
-                ],
-            },
-            Menu {
-                name: "Edit".into(),
-                items: vec![
-                    MenuItem::action("Undo", Undo),
-                    MenuItem::action("Redo", Redo),
-                ],
-            },
-            Menu {
-                name: "View".into(),
-                items: vec![MenuItem::action("Toggle Theme", ToggleTheme)],
-            },
-        ]);
-
-        cx.bind_keys([
-            KeyBinding::new("cmd-o", Open, None),
-            KeyBinding::new("ctrl-o", Open, None),
-            KeyBinding::new("cmd-s", Save, None),
-            KeyBinding::new("ctrl-s", Save, None),
-            KeyBinding::new("cmd-q", Quit, None),
-            KeyBinding::new("ctrl-q", Quit, None),
-            KeyBinding::new("cmd-z", Undo, None),
-            KeyBinding::new("ctrl-z", Undo, None),
-            KeyBinding::new("cmd-shift-z", Redo, None),
-            KeyBinding::new("ctrl-shift-z", Redo, None),
-            KeyBinding::new("cmd-t", ToggleTheme, None),
-            KeyBinding::new("ctrl-t", ToggleTheme, None),
-        ]);
-
-        cx.on_window_closed(|cx| cx.quit()).detach();
-
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                    None,
-                    size(px(1440.0), px(960.0)),
-                    cx,
-                ))),
-                ..Default::default()
-            },
-            |_window, cx| {
-                let handle = cx.new(|cx| SolaRoot::new(cx));
-                let weak_handle = handle.downgrade();
-                handle.update(cx, |this, _| {
-                    this.this_handle = Some(weak_handle);
-                });
-                _window.focus(&handle.read(cx).focus_handle);
-                handle
-            },
-        )
-        .expect("open GPUI window");
-    });
-}
-
-struct SolaRoot {
+pub struct SolaRoot {
     focus_handle: FocusHandle,
     this_handle: Option<WeakEntity<Self>>,
     workspace: Entity<Workspace>,
@@ -114,6 +42,7 @@ struct SolaRoot {
     typst_in_flight: HashSet<String>,
     cursor_visible: bool,
     cursor_blink_started: bool,
+    active_menu: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,7 +67,6 @@ impl SolaRoot {
             this.open_template(sample_markdown().to_string(), cx);
         });
 
-        use crate::workspace::WorkspaceEvent;
         cx.subscribe(&workspace, |this, _workspace, event, cx| match event {
             WorkspaceEvent::DocumentChanged | WorkspaceEvent::ActiveTabChanged => {
                 this.trigger_typst_renders(cx);
@@ -161,6 +89,7 @@ impl SolaRoot {
             typst_in_flight: HashSet::new(),
             cursor_visible: true,
             cursor_blink_started: false,
+            active_menu: None,
         };
 
         this.trigger_typst_renders(cx);
@@ -211,6 +140,216 @@ impl SolaRoot {
         .detach();
     }
 
+    fn render_menu_bar(&self, cx: &mut Context<Self>) -> Div {
+        let theme = self.workspace.read(cx).theme();
+        let active_menu = self.active_menu;
+
+        div()
+            .flex()
+            .flex_row()
+            .bg(rgb_hex(&theme.palette.panel_background))
+            .border_b_1()
+            .border_color(rgb_hex(&theme.palette.panel_border))
+            .px(px(8.0))
+            .child(self.render_menu_bar_item("File", active_menu == Some("File"), cx))
+            .child(self.render_menu_bar_item("Edit", active_menu == Some("Edit"), cx))
+            .child(self.render_menu_bar_item("View", active_menu == Some("View"), cx))
+    }
+
+    fn render_menu_bar_item(
+        &self,
+        label: &'static str,
+        is_active: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let theme = self.workspace.read(cx).theme();
+
+        div()
+            .px(px(12.0))
+            .py(px(6.0))
+            .rounded(px(4.0))
+            .bg(if is_active {
+                rgb_hex(&theme.palette.code_background)
+            } else {
+                gpui::hsla(0.0, 0.0, 0.0, 0.0)
+            })
+            .hover(|s| s.bg(rgb_hex(&theme.palette.code_background)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    if this.active_menu == Some(label) {
+                        this.active_menu = None;
+                    } else {
+                        this.active_menu = Some(label);
+                    }
+                    cx.notify();
+                }),
+            )
+            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                if this.active_menu.is_some() && this.active_menu != Some(label) {
+                    this.active_menu = Some(label);
+                    cx.notify();
+                }
+            }))
+            .child(
+                div()
+                    .text_size(px(13.0))
+                    .text_color(rgb_hex(&theme.palette.text_primary))
+                    .child(label),
+            )
+    }
+
+    fn render_menu_overlay(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let active_menu = self.active_menu?;
+        let theme = self.workspace.read(cx).theme().clone();
+
+        // Define items based on active_menu
+        let items = match active_menu {
+            "File" => vec![
+                ("Open...", "Ctrl+O", true),
+                ("Save", "Ctrl+S", true),
+                ("Separator", "", false),
+                ("Quit", "Ctrl+Q", true),
+            ],
+            "Edit" => vec![
+                ("Undo", "Ctrl+Z", true),
+                ("Redo", "Ctrl+Y", true),
+                ("Separator", "", false),
+                ("Insert Paragraph", "Ctrl+N", true),
+                ("Duplicate Block", "Ctrl+D", true),
+                ("Delete Block", "Backspace", true),
+            ],
+            "View" => vec![("Toggle Theme", "Ctrl+T", true)],
+            _ => vec![],
+        };
+
+        let x_pos = match active_menu {
+            "File" => px(8.0),
+            "Edit" => px(60.0),
+            "View" => px(110.0),
+            _ => px(0.0),
+        };
+
+        let border_color = rgb_hex(&theme.palette.panel_border);
+        let bg_color = rgb_hex(&theme.palette.panel_background);
+
+        Some(
+            div()
+                .absolute()
+                .top(px(34.0))
+                .left(x_pos)
+                .bg(bg_color)
+                .border_1()
+                .border_color(border_color)
+                .rounded(px(8.0))
+                .p(px(4.0))
+                .min_w(px(180.0))
+                .flex()
+                .flex_col()
+                .children(items.into_iter().map(|(label, shortcut, enabled)| {
+                    if label == "Separator" {
+                        return div()
+                            .h(px(1.0))
+                            .bg(border_color)
+                            .my(px(4.0))
+                            .into_any_element();
+                    }
+
+                    self.render_overlay_item(label, shortcut, enabled, cx)
+                        .into_any_element()
+                })),
+        )
+    }
+
+    fn render_overlay_item(
+        &self,
+        label: &'static str,
+        shortcut: &'static str,
+        _enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let theme = self.workspace.read(cx).theme();
+
+        div()
+            .px(px(12.0))
+            .py(px(8.0))
+            .rounded(px(4.0))
+            .hover(|s| s.bg(rgb_hex(&theme.palette.code_background)))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    this.active_menu = None;
+                    // Dispatch logic
+                    match label {
+                        "Open..." => this.open_project(window, cx),
+                        "Save" => this.workspace.update(cx, |w, cx| w.save_current_file(cx)),
+                        "Quit" => cx.quit(),
+                        "Undo" => this.workspace.update(cx, |w, cx| {
+                            w.update_active_document(cx, |d| {
+                                d.undo();
+                            });
+                        }),
+                        "Redo" => this.workspace.update(cx, |w, cx| {
+                            w.update_active_document(cx, |d| {
+                                d.redo();
+                            });
+                        }),
+                        "Insert Paragraph" => this.workspace.update(cx, |w, cx| {
+                            w.update_active_document(cx, |d| {
+                                d.insert_paragraph_after_focused("New block");
+                            });
+                        }),
+                        "Duplicate Block" => this.workspace.update(cx, |w, cx| {
+                            w.update_active_document(cx, |d| {
+                                d.duplicate_focused_block();
+                            });
+                        }),
+                        "Delete Block" => this.workspace.update(cx, |w, cx| {
+                            w.update_active_document(cx, |d| {
+                                d.delete_focused_block();
+                            });
+                        }),
+                        "Toggle Theme" => this.toggle_theme(cx),
+                        _ => {}
+                    }
+                    cx.notify();
+                }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .text_color(rgb_hex(&theme.palette.text_primary))
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(rgb_hex(&theme.palette.text_muted))
+                            .child(shortcut),
+                    ),
+            )
+    }
+
+    fn render_menu_mask(&self, cx: &mut Context<Self>) -> Option<Div> {
+        self.active_menu.map(|_| {
+            div()
+                .absolute()
+                .size_full()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.active_menu = None;
+                        cx.notify();
+                    }),
+                )
+        })
+    }
+
     fn toggle_theme(&mut self, cx: &mut Context<Self>) {
         self.workspace.update(cx, |workspace, cx| {
             workspace.toggle_theme(cx);
@@ -249,30 +388,6 @@ impl SolaRoot {
         let workspace = self.workspace.read(cx);
         let theme = workspace.theme();
 
-        let open_btn = action_button("Open...".to_string(), theme, true)
-            .id("open-project")
-            .on_click(cx.listener(|this, _event, window, cx| {
-                this.open_project(window, cx);
-            }));
-
-        let save_btn = action_button("Save".to_string(), theme, true)
-            .id("save-project")
-            .on_click(cx.listener(|this, _event, _window, cx| {
-                this.workspace.update(cx, |workspace, cx| {
-                    workspace.save_current_file(cx);
-                });
-            }));
-
-        let toggle_theme = action_button(
-            format!("theme: {}", workspace.theme_mode().label()),
-            theme,
-            true,
-        )
-        .id("toggle-theme")
-        .on_click(cx.listener(|this, _event, _window, cx| {
-            this.toggle_theme(cx);
-        }));
-
         div()
             .flex()
             .justify_between()
@@ -302,9 +417,6 @@ impl SolaRoot {
                 div()
                     .flex()
                     .gap(px(12.0))
-                    .child(open_btn)
-                    .child(save_btn)
-                    .child(toggle_theme)
                     .child(pill("workspace", format!("{} crates", 4), theme))
                     .child(pill(
                         "focused block",
@@ -539,58 +651,77 @@ impl SolaRoot {
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .gap(px(8.0))
-                            .child(section_title(
-                                "Dual-state engine prototype",
-                                &theme,
-                            ))
+                            .justify_between()
+                            .items_center()
                             .child(
                                 div()
-                                    .text_size(px(14.0))
-                                    .text_color(rgb_hex(&theme.palette.text_muted))
-                                    .child("Blurred blocks render their formatted summary; the focused block expands into raw Markdown source. Click another block to move focus."),
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(8.0))
+                                    .child(section_title("STRUCTURE EDITOR", &theme))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .gap(px(8.0))
+                                            .items_center()
+                                            .child(pill("focused", truncate_for_pill(&focused_summary, 32), &theme))
+                                            .child(pill("state", draft_label.to_string(), &theme)),
+                                    ),
                             )
                             .child(
                                 div()
                                     .flex()
-                                    .gap(px(10.0))
-                                    .items_center()
-                                    .child(undo_button)
-                                    .child(redo_button)
+                                    .gap(px(12.0))
                                     .child(previous_button)
                                     .child(next_button)
-                                    .child(pill(
-                                        "block summary",
-                                        truncate_for_pill(&focused_summary, 40),
-                                        &theme,
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap(px(10.0))
-                                    .items_center()
+                                    .child(div().w(px(1.0)).h(px(24.0)).bg(rgb_hex(&theme.palette.panel_border)))
                                     .child(insert_button)
                                     .child(duplicate_button)
                                     .child(delete_button),
-                            )
-                            .child(pill(
-                                "source state",
-                                draft_label.to_string(),
-                                &theme,
-                            ))
-                            .child(shortcut_chip("Ctrl/Cmd+T", "toggle theme", &theme))
-                            .child(shortcut_legend(&theme)),
+                            ),
                     ),
             )
             .child(
                 div()
-                    .id("document-scroll")
+                    .id("main-scroll-container")
+                    .flex()
+                    .flex_col()
                     .flex_1()
-                    .min_h_0()
                     .overflow_y_scroll()
-                    .child(blocks),
+                    .bg(rgb_hex(&theme.palette.app_background))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(32.0))
+                            .p(px(32.0))
+                            .max_w(px(900.0))
+                            .mx_auto()
+                            .child(
+                                div()
+                                    .flex()
+                                    .justify_between()
+                                    .items_center()
+                                    .child(section_title("DOCUMENT SURFACE", &theme))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .gap(px(12.0))
+                                            .child(undo_button)
+                                            .child(redo_button),
+                                    ),
+                            )
+                            .child(blocks)
+                            .child(
+                                div()
+                                    .mt(px(24.0))
+                                    .pt(px(24.0))
+                                    .border_t_1()
+                                    .border_color(rgb_hex(&theme.palette.panel_border))
+                                    .child(section_title("KEYBOARD SHORTCUTS", &theme))
+                                    .child(div().mt(px(16.0)).child(shortcut_legend(&theme))),
+                            ),
+                    ),
             )
     }
 
@@ -755,9 +886,9 @@ impl SolaRoot {
                     )
                 }),
             BlockKind::Quote => div()
-                .pl(px(14.0))
-                .border_l_2()
-                .border_color(rgb_hex(&theme.palette.accent))
+                .flex()
+                .gap(px(12.0))
+                .child(div().w(px(4.0)).bg(rgb_hex(&theme.palette.accent)).rounded_full())
                 .child(if block.typst.is_some() {
                     self.render_typst_preview(block, "Quote", theme)
                 } else {
@@ -768,45 +899,33 @@ impl SolaRoot {
                         theme,
                     )
                 }),
-            BlockKind::CodeFence { language } => {
-                let editor_style = FocusedEditorStyle::from_theme(theme);
-                let spans = self.highlighter.highlight(&block.rendered);
-                let runs = spans_to_runs(&spans, &editor_style, theme);
-
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_size(px(12.0))
-                            .text_color(rgb_hex(&theme.palette.text_muted))
-                            .child(format!(
-                                "Code fence{}",
-                                language
-                                    .as_ref()
-                                    .map(|lang| format!(" · {}", lang))
-                                    .unwrap_or_default()
-                            )),
-                    )
-                    .child(
-                        div()
-                            .id(("code-block-scroll", block.id))
-                            .p(px(14.0))
-                            .bg(rgb_hex(&theme.palette.code_background))
-                            .rounded(px(10.0))
-                            .overflow_x_scroll()
-                            .child(FocusedEditorElement::new(
-                                &block.rendered,
-                                editor_style,
-                                runs,
-                                None,
-                                false,
-                                rgb_hex(&theme.palette.selection),
-                                rgb_hex(&theme.palette.cursor),
-                            )),
-                    )
-            }
+            BlockKind::CodeFence { language } => div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(rgb_hex(&theme.palette.text_muted))
+                        .child(format!(
+                            "Code block · {}",
+                            language.as_ref().unwrap_or(&"plain text".to_string())
+                        )),
+                )
+                .child(
+                    div()
+                        .id(("code-preview", block.id))
+                        .p(px(14.0))
+                        .bg(rgb_hex(&theme.palette.code_background))
+                        .rounded(px(10.0))
+                        .overflow_x_scroll()
+                        .child(
+                            div()
+                                .text_size(px(theme.typography.code_size as f32))
+                                .text_color(rgb_hex(&theme.palette.text_primary))
+                                .child(block.rendered.clone()),
+                        ),
+                ),
             BlockKind::MathBlock => self.render_typst_preview(block, "Math block", theme),
             BlockKind::TypstBlock => self.render_typst_preview(block, "Typst block", theme),
         }
@@ -1022,13 +1141,12 @@ impl SolaRoot {
                                             image
                                                 .alt
                                                 .clone()
-                                                .or_else(|| image.src.clone())
-                                                .unwrap_or_else(|| "inline image".to_string()),
+                                                .unwrap_or_else(|| "no alt text".to_string()),
                                         ),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(12.0))
+                                        .text_size(px(11.0))
                                         .text_color(rgb_hex(&theme.palette.text_muted))
                                         .child(format!(
                                             "{}{}",
@@ -1048,9 +1166,7 @@ impl SolaRoot {
             },
         )
     }
-}
 
-impl SolaRoot {
     fn trigger_typst_renders(&mut self, cx: &mut Context<Self>) {
         let requests = {
             let workspace = self.workspace.read(cx);
@@ -1150,7 +1266,7 @@ impl SolaRoot {
         let primary = modifiers.control || modifiers.platform;
 
         if primary && key.eq_ignore_ascii_case("t") {
-            self.toggle_theme(cx);
+            self.workspace.update(cx, |w, cx| w.toggle_theme(cx));
             return true;
         }
 
@@ -1344,6 +1460,7 @@ impl Render for SolaRoot {
 
         div()
             .size_full()
+            .relative()
             .bg(rgb_hex(&theme.palette.app_background))
             .text_color(rgb_hex(&theme.palette.text_primary))
             .on_action(cx.listener(|this, _action: &Open, window, cx| {
@@ -1372,13 +1489,17 @@ impl Render for SolaRoot {
                 });
             }))
             .on_action(cx.listener(|this, _action: &ToggleTheme, _window, cx| {
-                this.toggle_theme(cx);
+                this.workspace.update(cx, |workspace, cx| {
+                    workspace.toggle_theme(cx);
+                });
             }))
+            .child(self.render_menu_bar(cx))
             .child(
                 div()
-                    .size_full()
+                    .flex_1()
                     .flex()
                     .flex_col()
+                    .min_h_0()
                     .child(self.render_header(cx))
                     .child(
                         div()
@@ -1398,9 +1519,85 @@ impl Render for SolaRoot {
                             ),
                     ),
             )
+            .when_some(self.render_menu_mask(cx), |this, mask| this.child(mask))
+            .when_some(self.render_menu_overlay(cx), |this, overlay| {
+                this.child(overlay)
+            })
     }
 }
 
+pub fn run() {
+    #[cfg(target_os = "linux")]
+    if let Err(message) = ensure_linux_display_backend() {
+        eprintln!("{message}");
+        return;
+    }
+
+    Application::new().run(|cx| {
+        cx.set_menus(vec![
+            Menu {
+                name: "Sola".into(),
+                items: vec![MenuItem::action("Quit", Quit)],
+            },
+            Menu {
+                name: "File".into(),
+                items: vec![
+                    MenuItem::action("Open...", Open),
+                    MenuItem::action("Save", Save),
+                ],
+            },
+            Menu {
+                name: "Edit".into(),
+                items: vec![
+                    MenuItem::action("Undo", Undo),
+                    MenuItem::action("Redo", Redo),
+                ],
+            },
+            Menu {
+                name: "View".into(),
+                items: vec![MenuItem::action("Toggle Theme", ToggleTheme)],
+            },
+        ]);
+
+        cx.bind_keys([
+            KeyBinding::new("cmd-o", Open, None),
+            KeyBinding::new("ctrl-o", Open, None),
+            KeyBinding::new("cmd-s", Save, None),
+            KeyBinding::new("ctrl-s", Save, None),
+            KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("ctrl-q", Quit, None),
+            KeyBinding::new("cmd-z", Undo, None),
+            KeyBinding::new("ctrl-z", Undo, None),
+            KeyBinding::new("cmd-shift-z", Redo, None),
+            KeyBinding::new("ctrl-shift-z", Redo, None),
+            KeyBinding::new("cmd-t", ToggleTheme, None),
+            KeyBinding::new("ctrl-t", ToggleTheme, None),
+        ]);
+
+        cx.on_window_closed(|cx| cx.quit()).detach();
+
+        cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                    None,
+                    size(px(1280.0), px(800.0)),
+                    cx,
+                ))),
+                ..Default::default()
+            },
+            |_window, cx| {
+                let handle = cx.new(|cx| SolaRoot::new(cx));
+                let weak_handle = handle.downgrade();
+                handle.update(cx, |this, _| {
+                    this.this_handle = Some(weak_handle);
+                });
+                _window.focus(&handle.read(cx).focus_handle);
+                handle
+            },
+        )
+        .expect("open GPUI window");
+    });
+}
 
 pub(crate) fn rgb_hex(hex: &str) -> Hsla {
     rgb(parse_hex_color(hex).unwrap_or(0xffffff)).into()

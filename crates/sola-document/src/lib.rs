@@ -160,6 +160,20 @@ impl DocumentModel {
         self.blocks.len()
     }
 
+    pub fn get_headings(&self) -> Vec<(usize, u8, String)> {
+        self.blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, block)| {
+                if let BlockKind::Heading { level } = block.kind {
+                    Some((index, level, block.rendered.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo_stack.is_empty()
     }
