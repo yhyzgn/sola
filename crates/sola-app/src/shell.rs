@@ -67,7 +67,7 @@ impl SolaRoot {
 
         // Sync initial document with sample markdown
         workspace.update(cx, |this, cx| {
-            this.open_template(sample_markdown().to_string(), cx);
+            this.open_template(DocumentModel::from_markdown(sample_markdown()), cx);
         });
 
         cx.subscribe(&workspace, |this, _workspace, event, cx| match event {
@@ -153,19 +153,46 @@ impl SolaRoot {
     }
 
     fn open_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if path.is_dir() {
-            let worktree = Worktree::local(path, cx);
-            self.workspace.update(cx, |workspace, cx| {
-                workspace.update_worktree(worktree, cx);
-            });
+        let is_dir = path.is_dir();
+        let target_dir = if is_dir {
+            path.clone()
         } else {
-            let dir = path.parent().unwrap_or(&path).to_path_buf();
-            let worktree = Worktree::local(dir, cx);
+            path.parent().unwrap_or(&path).to_path_buf()
+        };
+
+        // 1. Smart Worktree Update
+        let current_worktree_path = self.workspace.read(cx).worktree().read(cx).abs_path().to_path_buf();
+        if target_dir != current_worktree_path {
+            let worktree = Worktree::local(target_dir, cx);
             self.workspace.update(cx, |workspace, cx| {
                 workspace.update_worktree(worktree, cx);
-                workspace.open_file(path, cx);
             });
         }
+
+        // 2. Async Reading and Parsing (Thread-safe)
+        if !is_dir {
+            let workspace = self.workspace.clone();
+            let path = path.clone();
+
+            cx.spawn(|_this, cx: &mut gpui::AsyncApp| {
+                let cx = cx.clone();
+                let background = cx.background_executor().clone();
+                async move {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        let document = background.spawn(async move {
+                            DocumentModel::from_markdown(content)
+                        }).await;
+                        
+                        let _ = cx.update(|cx| {
+                            workspace.update(cx, |workspace, cx| {
+                                workspace.open_file(path, document, cx);
+                            });
+                        });
+                    }
+                }
+            }).detach();
+        }
+        
         cx.notify();
     }
 
@@ -496,7 +523,7 @@ impl SolaRoot {
                     this.active_submenu = None;
                     // Dispatch logic
                     match label {
-                        "New" => this.workspace.update(cx, |w, cx| w.open_template("".to_string(), cx)),
+                        "New" => this.workspace.update(cx, |w, cx| w.open_template(DocumentModel::from_markdown(""), cx)),
                         "Open File..." => this.open_file_dialog(window, cx),
                         "Open Folder..." => this.open_folder_dialog(window, cx),
                         "Save" => this.workspace.update(cx, |w, cx| w.save_current_file(cx)),

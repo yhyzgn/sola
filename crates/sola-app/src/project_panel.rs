@@ -1,3 +1,4 @@
+use sola_document::DocumentModel;
 use crate::workspace::{Workspace, WorkspaceEvent};
 use crate::worktree::{Entry, WorktreeEvent};
 use gpui::prelude::*;
@@ -89,9 +90,26 @@ impl ProjectPanel {
     }
 
     fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        self.workspace.update(cx, |workspace, cx| {
-            workspace.open_file(path, cx);
-        });
+        let workspace = self.workspace.clone();
+        let path = path.clone();
+
+        cx.spawn(|_this, cx: &mut gpui::AsyncApp| {
+            let cx = cx.clone();
+            let background = cx.background_executor().clone();
+            async move {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let document = background.spawn(async move {
+                        DocumentModel::from_markdown(content)
+                    }).await;
+                    
+                    let _ = cx.update(|cx| {
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.open_file(path, document, cx);
+                        });
+                    });
+                }
+            }
+        }).detach();
     }
 
     fn show_context_menu(&mut self, path: PathBuf, position: Point<Pixels>, cx: &mut Context<Self>) {

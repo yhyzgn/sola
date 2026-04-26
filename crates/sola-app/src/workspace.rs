@@ -141,30 +141,27 @@ impl Workspace {
         }
     }
 
-    pub fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    pub fn open_file(&mut self, path: PathBuf, document: DocumentModel, cx: &mut Context<Self>) {
         self.add_recent_path(path.clone());
         // Check if already open
         if let Some(idx) = self.documents.iter().position(|d| d.path.as_ref() == Some(&path)) {
             self.active_document_index = Some(idx);
         } else {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                let document = DocumentModel::from_markdown(&content);
-                self.documents.push(OpenDocument {
-                    path: Some(path),
-                    document,
-                });
-                self.active_document_index = Some(self.documents.len() - 1);
-            }
+            self.documents.push(OpenDocument {
+                path: Some(path),
+                document,
+            });
+            self.active_document_index = Some(self.documents.len() - 1);
         }
         cx.emit(WorkspaceEvent::DocumentChanged);
         cx.emit(WorkspaceEvent::ActiveTabChanged);
         cx.notify();
     }
 
-    pub fn open_template(&mut self, content: String, cx: &mut Context<Self>) {
+    pub fn open_template(&mut self, document: DocumentModel, cx: &mut Context<Self>) {
         self.documents.push(OpenDocument {
             path: None,
-            document: DocumentModel::from_markdown(&content),
+            document,
         });
         self.active_document_index = Some(self.documents.len() - 1);
         cx.emit(WorkspaceEvent::DocumentChanged);
