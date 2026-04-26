@@ -26,18 +26,24 @@ impl ThemeMode {
     }
 }
 
+pub struct OpenDocument {
+    pub path: Option<PathBuf>,
+    pub document: DocumentModel,
+}
+
 pub struct Workspace {
     worktree: Entity<Worktree>,
-    document: DocumentModel,
+    documents: Vec<OpenDocument>,
+    active_document_index: Option<usize>,
     theme: Theme,
     theme_mode: ThemeMode,
-    current_path: Option<PathBuf>,
 }
 
 pub enum WorkspaceEvent {
     DocumentChanged,
     ThemeChanged,
     WorktreeChanged,
+    ActiveTabChanged,
 }
 
 impl EventEmitter<WorkspaceEvent> for Workspace {}
@@ -46,10 +52,10 @@ impl Workspace {
     pub fn new(worktree: Entity<Worktree>, _cx: &mut Context<Self>) -> Self {
         Self {
             worktree,
-            document: DocumentModel::from_markdown(""),
+            documents: Vec::new(),
+            active_document_index: None,
             theme: Theme::sola_dark(),
             theme_mode: ThemeMode::Dark,
-            current_path: None,
         }
     }
 
@@ -63,23 +69,31 @@ impl Workspace {
         cx.notify();
     }
 
-    pub fn document(&self) -> &DocumentModel {
-        &self.document
+    pub fn documents(&self) -> &[OpenDocument] {
+        &self.documents
     }
 
-    pub fn document_mut(&mut self) -> &mut DocumentModel {
-        &mut self.document
+    pub fn active_document_index(&self) -> Option<usize> {
+        self.active_document_index
     }
 
-    pub fn update_document<R>(
+    pub fn active_document_ref(&self) -> Option<&DocumentModel> {
+        self.active_document_index
+            .and_then(|idx| self.documents.get(idx))
+            .map(|d| &d.document)
+    }
+
+    pub fn update_active_document<R>(
         &mut self,
         cx: &mut Context<Self>,
         f: impl FnOnce(&mut DocumentModel) -> R,
-    ) -> R {
-        let result = f(&mut self.document);
+    ) -> Option<R> {
+        let idx = self.active_document_index?;
+        let doc = self.documents.get_mut(idx)?;
+        let result = f(&mut doc.document);
         cx.emit(WorkspaceEvent::DocumentChanged);
         cx.notify();
-        result
+        Some(result)
     }
 
     pub fn theme(&self) -> &Theme {
@@ -101,25 +115,74 @@ impl Workspace {
     }
 
     pub fn current_path(&self) -> Option<&PathBuf> {
-        self.current_path.as_ref()
+        self.active_document_index
+            .and_then(|idx| self.documents.get(idx))
+            .and_then(|d| d.path.as_ref())
     }
 
     pub fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            self.document = DocumentModel::from_markdown(&content);
-            self.current_path = Some(path);
+        // Check if already open
+        if let Some(idx) = self.documents.iter().position(|d| d.path.as_ref() == Some(&path)) {
+            self.active_document_index = Some(idx);
+        } else {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let document = DocumentModel::from_markdown(&content);
+                self.documents.push(OpenDocument {
+                    path: Some(path),
+                    document,
+                });
+                self.active_document_index = Some(self.documents.len() - 1);
+            }
+        }
+        cx.emit(WorkspaceEvent::DocumentChanged);
+        cx.emit(WorkspaceEvent::ActiveTabChanged);
+        cx.notify();
+    }
+    
+    pub fn open_template(&mut self, content: String, cx: &mut Context<Self>) {
+        self.documents.push(OpenDocument {
+            path: None,
+            document: DocumentModel::from_markdown(&content),
+        });
+        self.active_document_index = Some(self.documents.len() - 1);
+        cx.emit(WorkspaceEvent::DocumentChanged);
+        cx.emit(WorkspaceEvent::ActiveTabChanged);
+        cx.notify();
+    }
+
+    pub fn switch_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.documents.len() {
+            self.active_document_index = Some(index);
+            cx.emit(WorkspaceEvent::ActiveTabChanged);
+            cx.emit(WorkspaceEvent::DocumentChanged);
+            cx.notify();
+        }
+    }
+
+    pub fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.documents.len() {
+            self.documents.remove(index);
+            if self.documents.is_empty() {
+                self.active_document_index = None;
+            } else {
+                let new_idx = self.active_document_index.unwrap_or(0);
+                self.active_document_index = Some(new_idx.min(self.documents.len() - 1));
+            }
+            cx.emit(WorkspaceEvent::ActiveTabChanged);
             cx.emit(WorkspaceEvent::DocumentChanged);
             cx.notify();
         }
     }
 
     pub fn save_current_file(&mut self, cx: &mut Context<Self>) {
-        if let Some(path) = &self.current_path {
-            let content = self.document.source();
-            if let Ok(_) = std::fs::write(path, content) {
-                // We could emit a specific 'Saved' event, but for now just notify
-                cx.emit(WorkspaceEvent::DocumentChanged);
-                cx.notify();
+        if let Some(idx) = self.active_document_index {
+            let doc = &mut self.documents[idx];
+            if let Some(path) = &doc.path {
+                let content = doc.document.source();
+                if let Ok(_) = std::fs::write(path, content) {
+                    cx.emit(WorkspaceEvent::DocumentChanged);
+                    cx.notify();
+                }
             }
         }
     }

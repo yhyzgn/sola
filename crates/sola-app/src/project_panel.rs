@@ -34,7 +34,7 @@ impl ProjectPanel {
         self.this_handle = Some(handle);
         
         cx.subscribe(&self.workspace, |this, _workspace, event, cx| match event {
-            WorkspaceEvent::DocumentChanged | WorkspaceEvent::ThemeChanged => {
+            WorkspaceEvent::DocumentChanged | WorkspaceEvent::ThemeChanged | WorkspaceEvent::ActiveTabChanged => {
                 cx.notify();
             }
             WorkspaceEvent::WorktreeChanged => {
