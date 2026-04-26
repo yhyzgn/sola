@@ -1,3 +1,21 @@
 use gpui::actions;
 
-actions!(sola, [Open, Save, Quit, Undo, Redo, ToggleTheme, NewFile, NewFolder, Rename, Delete]);
+actions!(
+    sola,
+    [
+        Open,
+        OpenFile,
+        OpenFolder,
+        Save,
+        SaveAs,
+        NewFile,
+        NewFolder,
+        Rename,
+        Delete,
+        Quit,
+        Undo,
+        Redo,
+        ToggleTheme,
+        CloseTab
+    ]
+);

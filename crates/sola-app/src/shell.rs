@@ -1,4 +1,4 @@
-use crate::actions::{Open, Quit, Redo, Save, ToggleTheme, Undo};
+use crate::actions::{CloseTab, Delete, NewFile, NewFolder, Open, OpenFile, OpenFolder, Quit, Redo, Save, SaveAs, ToggleTheme, Undo};
 use crate::focused_editor::{
     FocusedEditorElement, FocusedEditorStyle, approximate_editor_wrap_width,
     move_cursor_vertical_visual, shape_focused_lines, spans_to_runs, visual_line_edge_offset,
@@ -43,6 +43,7 @@ pub struct SolaRoot {
     cursor_visible: bool,
     cursor_blink_started: bool,
     active_menu: Option<&'static str>,
+    active_submenu: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +91,7 @@ impl SolaRoot {
             cursor_visible: true,
             cursor_blink_started: false,
             active_menu: None,
+            active_submenu: None,
         };
 
         this.trigger_typst_renders(cx);
@@ -98,14 +100,37 @@ impl SolaRoot {
 
     fn open_project(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         use gpui::PathPromptOptions;
-        let this_handle = self.this_handle.clone();
-
-        let paths_rx = cx.prompt_for_paths(PathPromptOptions {
+        self.open_project_with_options(PathPromptOptions {
             files: true,
             directories: true,
             multiple: false,
             prompt: Some("Open File or Folder".into()),
-        });
+        }, cx);
+    }
+
+    fn open_file_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        use gpui::PathPromptOptions;
+        self.open_project_with_options(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Open File".into()),
+        }, cx);
+    }
+
+    fn open_folder_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        use gpui::PathPromptOptions;
+        self.open_project_with_options(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Open Folder".into()),
+        }, cx);
+    }
+
+    fn open_project_with_options(&mut self, options: gpui::PathPromptOptions, cx: &mut Context<Self>) {
+        let this_handle = self.this_handle.clone();
+        let paths_rx = cx.prompt_for_paths(options);
 
         cx.spawn(|_this, cx: &mut gpui::AsyncApp| {
             let mut cx = cx.clone();
@@ -115,24 +140,49 @@ impl SolaRoot {
                         if let Some(this_handle) = this_handle {
                             let path = path.clone();
                             let _ = this_handle.update(&mut cx, |this, cx| {
-                                if path.is_dir() {
-                                    // New Worktree
-                                    let worktree = Worktree::local(path, cx);
-                                    this.workspace.update(cx, |workspace, cx| {
-                                        workspace.update_worktree(worktree, cx);
-                                    });
-                                } else {
-                                    // Open File
-                                    let dir = path.parent().unwrap_or(&path);
-                                    let worktree = Worktree::local(dir, cx);
-                                    this.workspace.update(cx, |workspace, cx| {
-                                        workspace.update_worktree(worktree, cx);
-                                        workspace.open_file(path, cx);
-                                    });
-                                }
-                                cx.notify();
+                                this.open_path(path, cx);
                             });
                         }
+                    }
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn open_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if path.is_dir() {
+            let worktree = Worktree::local(path, cx);
+            self.workspace.update(cx, |workspace, cx| {
+                workspace.update_worktree(worktree, cx);
+            });
+        } else {
+            let dir = path.parent().unwrap_or(&path).to_path_buf();
+            let worktree = Worktree::local(dir, cx);
+            self.workspace.update(cx, |workspace, cx| {
+                workspace.update_worktree(worktree, cx);
+                workspace.open_file(path, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    fn save_as_project(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let this_handle = self.this_handle.clone();
+
+        let base_path = self.workspace.read(cx).current_path().cloned().unwrap_or_else(|| PathBuf::from("."));
+        let path_rx = cx.prompt_for_new_path(&base_path, Some("untitled.md"));
+
+        cx.spawn(|_this, cx: &mut gpui::AsyncApp| {
+            let mut cx = cx.clone();
+            async move {
+                if let Ok(Ok(Some(path))) = path_rx.await {
+                    if let Some(this_handle) = this_handle {
+                        let _ = this_handle.update(&mut cx, |this, cx| {
+                            this.workspace.update(cx, |workspace, cx| {
+                                workspace.save_as(path, cx);
+                            });
+                        });
                     }
                 }
             }
@@ -206,9 +256,16 @@ impl SolaRoot {
         // Define items based on active_menu
         let items = match active_menu {
             "File" => vec![
-                ("Open...", "Ctrl+O", true),
-                ("Save", "Ctrl+S", true),
+                ("New", "Ctrl+N", true),
                 ("Separator", "", false),
+                ("Open File...", "Ctrl+O", true),
+                ("Open Folder...", "", true),
+                ("Open Recent", ">", true),
+                ("Separator", "", false),
+                ("Save", "Ctrl+S", true),
+                ("Save As...", "Ctrl+Shift+S", true),
+                ("Separator", "", false),
+                ("Close Tab", "Ctrl+W", true),
                 ("Quit", "Ctrl+Q", true),
             ],
             "Edit" => vec![
@@ -243,7 +300,7 @@ impl SolaRoot {
                 .border_color(border_color)
                 .rounded(px(8.0))
                 .p(px(4.0))
-                .min_w(px(180.0))
+                .min_w(px(200.0))
                 .flex()
                 .flex_col()
                 .children(items.into_iter().map(|(label, shortcut, enabled)| {
@@ -255,10 +312,106 @@ impl SolaRoot {
                             .into_any_element();
                     }
 
+                    if label == "Open Recent" {
+                         return self.render_recent_menu_item(cx).into_any_element();
+                    }
+
                     self.render_overlay_item(label, shortcut, enabled, cx)
                         .into_any_element()
                 })),
         )
+    }
+
+    fn render_recent_menu_item(&self, cx: &mut Context<Self>) -> Div {
+        let theme = self.workspace.read(cx).theme().clone();
+        let is_active = self.active_submenu == Some("Recent");
+        
+        div()
+            .relative()
+            .px(px(12.0))
+            .py(px(8.0))
+            .rounded(px(4.0))
+            .hover(|s| s.bg(rgb_hex("#3a3a3a")))
+            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                this.active_submenu = Some("Recent");
+                cx.notify();
+            }))
+            .child(
+                div()
+                    .flex()
+                    .justify_between()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .text_color(rgb_hex(&theme.palette.text_primary))
+                            .child("Open Recent"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(rgb_hex(&theme.palette.text_muted))
+                            .child(">"),
+                    ),
+            )
+            .when(is_active, |this| {
+                this.child(self.render_recent_submenu(cx))
+            })
+    }
+
+    fn render_recent_submenu(&self, cx: &mut Context<Self>) -> Div {
+        let workspace = self.workspace.read(cx);
+        let theme = workspace.theme();
+        let recent_paths = workspace.recent_paths();
+        
+        div()
+            .absolute()
+            .top(px(-4.0))
+            .left(px(196.0))
+            .bg(rgb_hex(&theme.palette.panel_background))
+            .border_1()
+            .border_color(rgb_hex(&theme.palette.panel_border))
+            .rounded(px(8.0))
+            .p(px(4.0))
+            .min_w(px(240.0))
+            .flex()
+            .flex_col()
+            .children(recent_paths.iter().map(|path| {
+                let path = path.clone();
+                let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string_lossy().to_string());
+                
+                div()
+                    .px(px(12.0))
+                    .py(px(6.0))
+                    .rounded(px(4.0))
+                    .hover(|s| s.bg(rgb_hex("#3a3a3a")))
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                        this.open_path(path.clone(), cx);
+                        this.active_menu = None;
+                        this.active_submenu = None;
+                        cx.notify();
+                    }))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(rgb_hex(&theme.palette.text_primary))
+                            .child(name)
+                    )
+            }))
+            .child(div().h(px(1.0)).bg(rgb_hex(&theme.palette.panel_border)).my(px(4.0)))
+            .child(
+                div()
+                    .px(px(12.0))
+                    .py(px(6.0))
+                    .rounded(px(4.0))
+                    .hover(|s| s.bg(rgb_hex("#3a3a3a")))
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                        this.workspace.update(cx, |w, cx| w.clear_recent_paths(cx));
+                        this.active_menu = None;
+                        this.active_submenu = None;
+                    }))
+                    .child(div().text_size(px(12.0)).child("Clear Items"))
+            )
     }
 
     fn render_overlay_item(
@@ -275,14 +428,29 @@ impl SolaRoot {
             .py(px(8.0))
             .rounded(px(4.0))
             .hover(|s| s.bg(rgb_hex(&theme.palette.code_background)))
+            .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                if this.active_submenu.is_some() {
+                    this.active_submenu = None;
+                    cx.notify();
+                }
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, window, cx| {
                     this.active_menu = None;
+                    this.active_submenu = None;
                     // Dispatch logic
                     match label {
-                        "Open..." => this.open_project(window, cx),
+                        "New" => this.workspace.update(cx, |w, cx| w.open_template("".to_string(), cx)),
+                        "Open File..." => this.open_file_dialog(window, cx),
+                        "Open Folder..." => this.open_folder_dialog(window, cx),
                         "Save" => this.workspace.update(cx, |w, cx| w.save_current_file(cx)),
+                        "Save As..." => this.save_as_project(window, cx),
+                        "Close Tab" => this.workspace.update(cx, |w, cx| {
+                            if let Some(idx) = w.active_document_index() {
+                                w.close_tab(idx, cx);
+                            }
+                        }),
                         "Quit" => cx.quit(),
                         "Undo" => this.workspace.update(cx, |w, cx| {
                             w.update_active_document(cx, |d| {
@@ -344,6 +512,7 @@ impl SolaRoot {
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| {
                         this.active_menu = None;
+                        this.active_submenu = None;
                         cx.notify();
                     }),
                 )
@@ -1466,10 +1635,19 @@ impl Render for SolaRoot {
             .on_action(cx.listener(|this, _action: &Open, window, cx| {
                 this.open_project(window, cx);
             }))
+            .on_action(cx.listener(|this, _action: &OpenFile, window, cx| {
+                this.open_file_dialog(window, cx);
+            }))
+            .on_action(cx.listener(|this, _action: &OpenFolder, window, cx| {
+                this.open_folder_dialog(window, cx);
+            }))
             .on_action(cx.listener(|this, _action: &Save, _window, cx| {
                 this.workspace.update(cx, |workspace, cx| {
                     workspace.save_current_file(cx);
                 });
+            }))
+            .on_action(cx.listener(|this, _action: &SaveAs, window, cx| {
+                this.save_as_project(window, cx);
             }))
             .on_action(cx.listener(|_this, _action: &Quit, _window, cx| {
                 cx.quit();
@@ -1491,6 +1669,13 @@ impl Render for SolaRoot {
             .on_action(cx.listener(|this, _action: &ToggleTheme, _window, cx| {
                 this.workspace.update(cx, |workspace, cx| {
                     workspace.toggle_theme(cx);
+                });
+            }))
+            .on_action(cx.listener(|this, _action: &CloseTab, _window, cx| {
+                this.workspace.update(cx, |w, cx| {
+                    if let Some(idx) = w.active_document_index() {
+                        w.close_tab(idx, cx);
+                    }
                 });
             }))
             .child(self.render_menu_bar(cx))
@@ -1542,8 +1727,16 @@ pub fn run() {
             Menu {
                 name: "File".into(),
                 items: vec![
-                    MenuItem::action("Open...", Open),
+                    MenuItem::action("New", NewFile),
+                    MenuItem::separator(),
+                    MenuItem::action("Open...", OpenFile),
+                    MenuItem::action("Open Folder...", OpenFolder),
+                    MenuItem::separator(),
                     MenuItem::action("Save", Save),
+                    MenuItem::action("Save As...", SaveAs),
+                    MenuItem::separator(),
+                    MenuItem::action("Close", CloseTab),
+                    MenuItem::action("Quit", Quit),
                 ],
             },
             Menu {
@@ -1560,10 +1753,18 @@ pub fn run() {
         ]);
 
         cx.bind_keys([
-            KeyBinding::new("cmd-o", Open, None),
-            KeyBinding::new("ctrl-o", Open, None),
+            KeyBinding::new("cmd-n", NewFile, None),
+            KeyBinding::new("ctrl-n", NewFile, None),
+            KeyBinding::new("cmd-o", OpenFile, None),
+            KeyBinding::new("ctrl-o", OpenFile, None),
+            KeyBinding::new("cmd-shift-o", OpenFolder, None),
+            KeyBinding::new("ctrl-shift-o", OpenFolder, None),
             KeyBinding::new("cmd-s", Save, None),
             KeyBinding::new("ctrl-s", Save, None),
+            KeyBinding::new("cmd-shift-s", SaveAs, None),
+            KeyBinding::new("ctrl-shift-s", SaveAs, None),
+            KeyBinding::new("cmd-w", CloseTab, None),
+            KeyBinding::new("ctrl-w", CloseTab, None),
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("ctrl-q", Quit, None),
             KeyBinding::new("cmd-z", Undo, None),

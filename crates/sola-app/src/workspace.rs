@@ -37,6 +37,7 @@ pub struct Workspace {
     active_document_index: Option<usize>,
     theme: Theme,
     theme_mode: ThemeMode,
+    recent_paths: Vec<PathBuf>,
 }
 
 pub enum WorkspaceEvent {
@@ -56,6 +57,7 @@ impl Workspace {
             active_document_index: None,
             theme: Theme::sola_dark(),
             theme_mode: ThemeMode::Dark,
+            recent_paths: Vec::new(),
         }
     }
 
@@ -120,7 +122,27 @@ impl Workspace {
             .and_then(|d| d.path.as_ref())
     }
 
+    pub fn recent_paths(&self) -> &[PathBuf] {
+        &self.recent_paths
+    }
+
+    pub fn clear_recent_paths(&mut self, cx: &mut Context<Self>) {
+        self.recent_paths.clear();
+        cx.notify();
+    }
+
+    fn add_recent_path(&mut self, path: PathBuf) {
+        if let Some(pos) = self.recent_paths.iter().position(|p| p == &path) {
+            self.recent_paths.remove(pos);
+        }
+        self.recent_paths.insert(0, path);
+        if self.recent_paths.len() > 10 {
+            self.recent_paths.truncate(10);
+        }
+    }
+
     pub fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.add_recent_path(path.clone());
         // Check if already open
         if let Some(idx) = self.documents.iter().position(|d| d.path.as_ref() == Some(&path)) {
             self.active_document_index = Some(idx);
@@ -138,7 +160,7 @@ impl Workspace {
         cx.emit(WorkspaceEvent::ActiveTabChanged);
         cx.notify();
     }
-    
+
     pub fn open_template(&mut self, content: String, cx: &mut Context<Self>) {
         self.documents.push(OpenDocument {
             path: None,
@@ -183,6 +205,18 @@ impl Workspace {
                     cx.emit(WorkspaceEvent::DocumentChanged);
                     cx.notify();
                 }
+            }
+        }
+    }
+
+    pub fn save_as(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if let Some(idx) = self.active_document_index {
+            let content = self.documents[idx].document.source().to_string();
+            if let Ok(_) = std::fs::write(&path, content) {
+                self.documents[idx].path = Some(path.clone());
+                self.add_recent_path(path);
+                cx.emit(WorkspaceEvent::DocumentChanged);
+                cx.notify();
             }
         }
     }
