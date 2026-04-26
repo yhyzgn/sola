@@ -1,4 +1,6 @@
-use crate::actions::{CloseTab, Delete, NewFile, NewFolder, Open, OpenFile, OpenFolder, Quit, Redo, Save, SaveAs, ToggleTheme, Undo};
+use crate::actions::{
+    CloseTab, NewFile, Open, OpenFile, OpenFolder, Quit, Redo, Save, SaveAs, ToggleTheme, Undo,
+};
 use crate::focused_editor::{
     FocusedEditorElement, FocusedEditorStyle, approximate_editor_wrap_width,
     move_cursor_vertical_visual, shape_focused_lines, spans_to_runs, visual_line_edge_offset,
@@ -204,6 +206,7 @@ impl SolaRoot {
             .child(self.render_menu_bar_item("File", active_menu == Some("File"), cx))
             .child(self.render_menu_bar_item("Edit", active_menu == Some("Edit"), cx))
             .child(self.render_menu_bar_item("View", active_menu == Some("View"), cx))
+            .child(self.render_menu_bar_item("Themes", active_menu == Some("Themes"), cx))
     }
 
     fn render_menu_bar_item(
@@ -229,8 +232,10 @@ impl SolaRoot {
                 cx.listener(move |this, _, _, cx| {
                     if this.active_menu == Some(label) {
                         this.active_menu = None;
+                        this.active_submenu = None;
                     } else {
                         this.active_menu = Some(label);
+                        this.active_submenu = None;
                     }
                     cx.notify();
                 }),
@@ -238,6 +243,7 @@ impl SolaRoot {
             .on_mouse_move(cx.listener(move |this, _, _, cx| {
                 if this.active_menu.is_some() && this.active_menu != Some(label) {
                     this.active_menu = Some(label);
+                    this.active_submenu = None;
                     cx.notify();
                 }
             }))
@@ -259,11 +265,16 @@ impl SolaRoot {
                 ("New", "Ctrl+N", true),
                 ("Separator", "", false),
                 ("Open File...", "Ctrl+O", true),
-                ("Open Folder...", "", true),
+                ("Open Folder...", "Ctrl+Shift+O", true),
                 ("Open Recent", ">", true),
                 ("Separator", "", false),
                 ("Save", "Ctrl+S", true),
                 ("Save As...", "Ctrl+Shift+S", true),
+                ("Separator", "", false),
+                ("Import", ">", true),
+                ("Export", ">", true),
+                ("Separator", "", false),
+                ("Preferences", "Ctrl+,", true),
                 ("Separator", "", false),
                 ("Close Tab", "Ctrl+W", true),
                 ("Quit", "Ctrl+Q", true),
@@ -272,11 +283,28 @@ impl SolaRoot {
                 ("Undo", "Ctrl+Z", true),
                 ("Redo", "Ctrl+Y", true),
                 ("Separator", "", false),
+                ("Cut", "Ctrl+X", true),
+                ("Copy", "Ctrl+C", true),
+                ("Paste", "Ctrl+V", true),
+                ("Separator", "", false),
+                ("Select All", "Ctrl+A", true),
+                ("Separator", "", false),
                 ("Insert Paragraph", "Ctrl+N", true),
                 ("Duplicate Block", "Ctrl+D", true),
                 ("Delete Block", "Backspace", true),
             ],
-            "View" => vec![("Toggle Theme", "Ctrl+T", true)],
+            "View" => vec![
+                ("Toggle Sidebar", "Ctrl+\\", true),
+                ("Toggle Outline", "", true),
+                ("Separator", "", false),
+                ("Source Code Mode", "Ctrl+/", true),
+                ("Focus Mode", "F8", true),
+                ("Typewriter Mode", "F9", true),
+            ],
+            "Themes" => vec![
+                ("Sola Dark", "", true),
+                ("Sola Light", "", true),
+            ],
             _ => vec![],
         };
 
@@ -284,6 +312,7 @@ impl SolaRoot {
             "File" => px(8.0),
             "Edit" => px(60.0),
             "View" => px(110.0),
+            "Themes" => px(170.0),
             _ => px(0.0),
         };
 
@@ -300,7 +329,7 @@ impl SolaRoot {
                 .border_color(border_color)
                 .rounded(px(8.0))
                 .p(px(4.0))
-                .min_w(px(200.0))
+                .min_w(px(220.0))
                 .flex()
                 .flex_col()
                 .children(items.into_iter().map(|(label, shortcut, enabled)| {
@@ -312,8 +341,8 @@ impl SolaRoot {
                             .into_any_element();
                     }
 
-                    if label == "Open Recent" {
-                         return self.render_recent_menu_item(cx).into_any_element();
+                    if label == "Open Recent" || label == "Import" || label == "Export" {
+                         return self.render_cascading_menu_item(label, cx).into_any_element();
                     }
 
                     self.render_overlay_item(label, shortcut, enabled, cx)
@@ -322,9 +351,9 @@ impl SolaRoot {
         )
     }
 
-    fn render_recent_menu_item(&self, cx: &mut Context<Self>) -> Div {
+    fn render_cascading_menu_item(&self, label: &'static str, cx: &mut Context<Self>) -> Div {
         let theme = self.workspace.read(cx).theme().clone();
-        let is_active = self.active_submenu == Some("Recent");
+        let is_active = self.active_submenu == Some(label);
         
         div()
             .relative()
@@ -333,7 +362,7 @@ impl SolaRoot {
             .rounded(px(4.0))
             .hover(|s| s.bg(rgb_hex("#3a3a3a")))
             .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                this.active_submenu = Some("Recent");
+                this.active_submenu = Some(label);
                 cx.notify();
             }))
             .child(
@@ -345,7 +374,7 @@ impl SolaRoot {
                         div()
                             .text_size(px(13.0))
                             .text_color(rgb_hex(&theme.palette.text_primary))
-                            .child("Open Recent"),
+                            .child(label),
                     )
                     .child(
                         div()
@@ -355,19 +384,58 @@ impl SolaRoot {
                     ),
             )
             .when(is_active, |this| {
-                this.child(self.render_recent_submenu(cx))
+                this.child(self.render_cascading_submenu(label, cx))
             })
     }
 
-    fn render_recent_submenu(&self, cx: &mut Context<Self>) -> Div {
+    fn render_cascading_submenu(&self, label: &'static str, cx: &mut Context<Self>) -> Div {
         let workspace = self.workspace.read(cx);
         let theme = workspace.theme();
-        let recent_paths = workspace.recent_paths();
+
+        type MenuAction = Box<dyn Fn(&mut SolaRoot, &mut Context<SolaRoot>) + Send + Sync>;
+
+        let items: Vec<(String, MenuAction)> = match label {
+            "Open Recent" => {
+                let mut results: Vec<(String, MenuAction)> = Vec::new();
+                for path in workspace.recent_paths() {
+                    let path = path.clone();
+                    let name = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| path.to_string_lossy().to_string());
+                    results.push((
+                        name,
+                        Box::new(move |this: &mut SolaRoot, cx: &mut Context<SolaRoot>| {
+                            this.open_path(path.clone(), cx);
+                        }) as MenuAction,
+                    ));
+                }
+
+                results.push(("Separator".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Context<SolaRoot>| {}) as MenuAction));
+                results.push((
+                    "Clear Items".to_string(),
+                    Box::new(|this: &mut SolaRoot, cx: &mut Context<SolaRoot>| {
+                        this.workspace.update(cx, |w, cx| w.clear_recent_paths(cx));
+                    }) as MenuAction,
+                ));
+                results
+            }
+            "Import" => vec![
+                ("Markdown...".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Context<SolaRoot>| {}) as MenuAction),
+                ("HTML...".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Context<SolaRoot>| {}) as MenuAction),
+            ],
+            "Export" => vec![
+                ("PDF...".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Context<SolaRoot>| {}) as MenuAction),
+                ("HTML...".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Context<SolaRoot>| {}) as MenuAction),
+                ("Image...".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Context<SolaRoot>| {}) as MenuAction),
+            ],
+            _ => vec![],
+        };
         
         div()
             .absolute()
             .top(px(-4.0))
-            .left(px(196.0))
+            .left(px(216.0))
             .bg(rgb_hex(&theme.palette.panel_background))
             .border_1()
             .border_color(rgb_hex(&theme.palette.panel_border))
@@ -376,9 +444,10 @@ impl SolaRoot {
             .min_w(px(240.0))
             .flex()
             .flex_col()
-            .children(recent_paths.iter().map(|path| {
-                let path = path.clone();
-                let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string_lossy().to_string());
+            .children(items.into_iter().map(|(label, action)| {
+                if label == "Separator" {
+                    return div().h(px(1.0)).bg(rgb_hex(&theme.palette.panel_border)).my(px(4.0)).into_any_element();
+                }
                 
                 div()
                     .px(px(12.0))
@@ -386,7 +455,7 @@ impl SolaRoot {
                     .rounded(px(4.0))
                     .hover(|s| s.bg(rgb_hex("#3a3a3a")))
                     .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                        this.open_path(path.clone(), cx);
+                        action(this, cx);
                         this.active_menu = None;
                         this.active_submenu = None;
                         cx.notify();
@@ -395,23 +464,9 @@ impl SolaRoot {
                         div()
                             .text_size(px(12.0))
                             .text_color(rgb_hex(&theme.palette.text_primary))
-                            .child(name)
-                    )
+                            .child(label)
+                    ).into_any_element()
             }))
-            .child(div().h(px(1.0)).bg(rgb_hex(&theme.palette.panel_border)).my(px(4.0)))
-            .child(
-                div()
-                    .px(px(12.0))
-                    .py(px(6.0))
-                    .rounded(px(4.0))
-                    .hover(|s| s.bg(rgb_hex("#3a3a3a")))
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                        this.workspace.update(cx, |w, cx| w.clear_recent_paths(cx));
-                        this.active_menu = None;
-                        this.active_submenu = None;
-                    }))
-                    .child(div().text_size(px(12.0)).child("Clear Items"))
-            )
     }
 
     fn render_overlay_item(
@@ -477,7 +532,20 @@ impl SolaRoot {
                                 d.delete_focused_block();
                             });
                         }),
-                        "Toggle Theme" => this.toggle_theme(cx),
+                        "Sola Dark" => {
+                            this.workspace.update(cx, |w, cx| {
+                                if w.theme_mode() != crate::workspace::ThemeMode::Dark {
+                                    w.toggle_theme(cx);
+                                }
+                            });
+                        },
+                        "Sola Light" => {
+                            this.workspace.update(cx, |w, cx| {
+                                if w.theme_mode() != crate::workspace::ThemeMode::Light {
+                                    w.toggle_theme(cx);
+                                }
+                            });
+                        },
                         _ => {}
                     }
                     cx.notify();
@@ -503,13 +571,22 @@ impl SolaRoot {
             )
     }
 
-    fn render_menu_mask(&self, cx: &mut Context<Self>) -> Option<Div> {
+    fn render_menu_mask(&self, cx: &mut Context<Self>) -> Option<gpui::Stateful<Div>> {
         self.active_menu.map(|_| {
             div()
+                .id("menu-mask")
                 .absolute()
                 .size_full()
                 .on_mouse_down(
                     MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.active_menu = None;
+                        this.active_submenu = None;
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
                     cx.listener(|this, _, _, cx| {
                         this.active_menu = None;
                         this.active_submenu = None;
@@ -1667,9 +1744,7 @@ impl Render for SolaRoot {
                 });
             }))
             .on_action(cx.listener(|this, _action: &ToggleTheme, _window, cx| {
-                this.workspace.update(cx, |workspace, cx| {
-                    workspace.toggle_theme(cx);
-                });
+                this.toggle_theme(cx);
             }))
             .on_action(cx.listener(|this, _action: &CloseTab, _window, cx| {
                 this.workspace.update(cx, |w, cx| {

@@ -537,6 +537,12 @@
     - **支持子菜单渲染**：重构了 `render_menu_overlay`，引入了级联子菜单（Submenu）渲染能力。实现了“Open Recent >”的悬浮展开交互。
     - **动作与快捷键全覆盖**：补全了 Ctrl+N, Ctrl+Shift+S, Ctrl+W 等标准快捷键的 Action 映射与逻辑闭环。
     - 验证通过：用户现在可以像使用 Typora 一样通过层级化的菜单进行所有文件操作，最近文件功能运行稳定，交互逻辑符合传统桌面应用直觉。
+17. **全功能 Typora 级菜单体系与 Bug 修复**：
+    - **修复菜单关闭 Bug**：重构了 `render_menu_mask` 层。通过在应用最外层渲染一个透明的、高层级的遮罩层并拦截点击事件，成功解决了“点击页面其他地方菜单不关闭”的问题。
+    - **独立 Themes 菜单**：响应用户建议，将主题切换从 View 菜单中剥离，建立独立的顶层 “Themes” 菜单。支持 Sola Dark 和 Sola Light 的一键切换。
+    - **扩充功能树**：对齐 Typora 菜单深度。在 File 菜单中补全了 Import (Markdown/HTML) 和 Export (PDF/HTML/Image) 子菜单占位。
+    - **完善 Edit/View 交互**：扩充了 Cut/Copy/Paste, Select All 以及多种视图模式（Source Code/Focus/Typewriter）的菜单项，并实现了级联子菜单的高性能渲染。
+    - 验证通过：菜单栏功能布局与 Typora 高度一致，级联悬停交互丝滑，点击外部关闭逻辑符合预期，整体交互科学且完备。
 12. **修复菜单显示与快捷键响应问题**：
     - **初始获焦机制**：在窗口创建后显式调用 `window.focus()`，确保 `SolaRoot` 能够第一时间捕获并分发 Action。
     - **落地内置操作栏**：在页面 Header 中直接引入 “Open...” 和 “Save” 按钮。解决了 Linux 环境下原生全局菜单难以发现的问题，提供了双重操作入口。

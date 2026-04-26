@@ -16,6 +16,11 @@ actions!(
         Undo,
         Redo,
         ToggleTheme,
-        CloseTab
+        CloseTab,
+        Import,
+        Export,
+        Preferences,
+        ToggleSidebar,
+        ToggleOutline
     ]
 );
