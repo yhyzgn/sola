@@ -135,9 +135,13 @@ pub fn shape_focused_lines(
         .map(|lines| lines.into_vec())
 }
 
-pub fn approximate_editor_wrap_width(window_width: Pixels) -> Pixels {
-    let width = window_width - px(420.0);
-    if width > px(120.0) { width } else { px(120.0) }
+pub fn approximate_editor_wrap_width(available_width: Pixels) -> Pixels {
+    let width = available_width - px(40.0);
+    if width > px(120.0) {
+        width
+    } else {
+        px(120.0)
+    }
 }
 
 pub fn move_cursor_vertical_visual(
@@ -531,10 +535,19 @@ impl Element for FocusedEditorElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let style = Style::default();
         let wrap_width = approximate_editor_wrap_width(window.bounds().size.width);
 
         let visual_lines = layout_editor_blocks(window, &self.blocks, wrap_width);
+
+        // Calculate total height to enable scrolling
+        let total_height = visual_lines
+            .last()
+            .map_or(Pixels::ZERO, |l| l.y_offset + l.line_height)
+            + px(100.0); // Add bottom padding
+
+        let mut style = Style::default();
+        style.size.width = gpui::RelativeSize::Relative(1.0).into();
+        style.size.height = total_height.into();
 
         let layout_id = window.request_layout(style, None, cx);
         (
