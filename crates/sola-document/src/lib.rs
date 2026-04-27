@@ -461,6 +461,40 @@ impl DocumentModel {
         self.move_cursor_vertical(1, shift)
     }
 
+    pub fn global_offset_to_block_local(&self, global_offset: usize) -> Option<(usize, usize)> {
+        let mut current_global = 0;
+        for (i, block) in self.blocks.iter().enumerate() {
+            let block_len = block.source.len();
+            let block_end = current_global + block_len;
+
+            if global_offset >= current_global && global_offset <= block_end {
+                return Some((i, global_offset - current_global));
+            }
+            // +2 for the double newline between blocks (as defined in serialize_blocks)
+            current_global = block_end + 2;
+        }
+        None
+    }
+
+    pub fn block_local_to_global_offset(
+        &self,
+        block_index: usize,
+        local_offset: usize,
+    ) -> Option<usize> {
+        let mut current_global = 0;
+        for (i, block) in self.blocks.iter().enumerate() {
+            if i == block_index {
+                if local_offset <= block.source.len() {
+                    return Some(current_global + local_offset);
+                } else {
+                    return None;
+                }
+            }
+            current_global += block.source.len() + 2; // +2 for \n\n
+        }
+        None
+    }
+
     pub fn select_all(&mut self) -> bool {
         let index = self.focused_block;
         let text_len = if let Some(text) = self.focused_text() {
@@ -1016,7 +1050,15 @@ fn adapt_html(source: &str) -> Option<HtmlAdapter> {
         }
     }
 
-    saw_special.then_some(HtmlAdapter::Adapted { nodes })
+    if saw_special {
+        Some(HtmlAdapter::Adapted { nodes })
+    } else if source.trim().contains('<') {
+        Some(HtmlAdapter::Unsupported {
+            raw: source.to_string(),
+        })
+    } else {
+        None
+    }
 }
 
 fn find_closing_dollar(text: &str) -> Option<usize> {
@@ -1898,5 +1940,22 @@ Plain paragraph without math."#,
         let cursor = document.focused_cursor().unwrap();
         assert_eq!(cursor.head, 4);
         assert_eq!(cursor.anchor, Some(1));
+    }
+
+    #[test]
+    fn test_global_cursor_conversion() {
+        let doc = DocumentModel::from_markdown("# H1\n\nPara");
+        assert_eq!(doc.source(), "# H1\n\nPara");
+
+        // offset 6 is 'P'
+        // "# H1" is 4 chars
+        // "\n\n" is 2 chars
+        // Total before "Para" is 6
+        let (block_idx, local_offset) = doc.global_offset_to_block_local(6).unwrap();
+        assert_eq!(block_idx, 1);
+        assert_eq!(local_offset, 0);
+
+        let global_offset = doc.block_local_to_global_offset(1, 0).unwrap();
+        assert_eq!(global_offset, 6);
     }
 }
