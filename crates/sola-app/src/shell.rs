@@ -3,9 +3,9 @@ use crate::actions::{
     ToggleTheme, Undo,
 };
 use crate::focused_editor::{
-    FocusedEditorElement, FocusedEditorStyle, approximate_editor_wrap_width, generate_unified_runs,
-    move_cursor_vertical_visual, shape_focused_lines, visual_line_edge_offset,
-    visual_line_ranges,
+    EditorBlock, FocusedEditorElement, FocusedEditorStyle, approximate_editor_wrap_width,
+    generate_editor_blocks, move_cursor_vertical_visual, shape_focused_lines,
+    visual_line_edge_offset, visual_line_ranges,
 };
 use crate::project_panel::ProjectPanel;
 use crate::workspace::{Workspace, WorkspaceEvent};
@@ -986,7 +986,6 @@ impl SolaRoot {
         self.ensure_cursor_blink_loop(cx);
 
         let editor_style = FocusedEditorStyle::from_theme(&theme);
-        let full_text = document.source().to_string();
 
         let focused_block_idx = document.focused_block();
         let local_cursor = document.focused_cursor().cloned().unwrap_or_default();
@@ -998,7 +997,7 @@ impl SolaRoot {
             .and_then(|a| document.block_local_to_global_offset(focused_block_idx, a));
 
         let global_cursor = Some(global_cursor_head);
-        let runs = generate_unified_runs(&document, global_cursor, &editor_style, &theme);
+        let blocks = generate_editor_blocks(&document, global_cursor, &editor_style, &theme);
 
         let selection_color = rgb_hex(&theme.palette.selection);
         let cursor_color = rgb_hex(&theme.palette.cursor);
@@ -1006,9 +1005,8 @@ impl SolaRoot {
         let focus_handle = self.focus_handle.clone();
 
         let editor_element = FocusedEditorElement::new(
-            full_text,
+            blocks,
             editor_style,
-            runs,
             Some(CursorState {
                 head: global_cursor_head,
                 anchor: global_cursor_anchor,
@@ -1739,7 +1737,20 @@ impl SolaRoot {
             wrap_width,
         )?;
 
-        move_cursor_vertical_visual(&lines, cursor.head, delta, style.line_height)
+        let visual_lines =
+            crate::focused_editor::collect_visual_lines(&lines, style.line_height, 0, 0);
+        let blocks = vec![EditorBlock {
+            text: text.to_string(),
+            runs: vec![],
+            font_size: style.font_size,
+            line_height: style.line_height,
+            global_start: 0,
+            source_len: text.len(),
+            is_focused: true,
+            kind: BlockKind::Paragraph,
+        }];
+
+        move_cursor_vertical_visual(&visual_lines, &blocks, cursor.head, delta)
     }
 
     fn visual_line_edge_offset(
@@ -1761,7 +1772,7 @@ impl SolaRoot {
             wrap_width,
         )?;
 
-        let visual = visual_line_ranges(&lines);
+        let visual = visual_line_ranges(&lines, style.line_height);
         visual_line_edge_offset(&visual, cursor.head, line_end)
     }
 }

@@ -4,7 +4,7 @@ use gpui::{
     MouseMoveEvent, Pixels, Point, SharedString, Style, TextAlign, TextRun, Window, WrappedLine,
     px,
 };
-use sola_document::{CursorState, DocumentModel};
+use sola_document::{BlockKind, CursorState, DocumentModel};
 use sola_document::highlighter::{HighlightKind, HighlightedSpan, SyntaxHighlighter};
 use sola_theme::{Theme, parse_hex_color};
 use std::sync::Arc;
@@ -90,9 +90,13 @@ pub struct WrappedVisualLine {
 pub(crate) struct VisualLineRef {
     global_start: usize,
     global_end: usize,
+    rendered_local_start: usize,
     wrapped_line_start: usize,
     local_row: usize,
     global_row: usize,
+    y_offset: Pixels,
+    line_height: Pixels,
+    block_index: usize,
     line: WrappedLine,
 }
 
@@ -137,41 +141,50 @@ pub fn approximate_editor_wrap_width(window_width: Pixels) -> Pixels {
 }
 
 pub fn move_cursor_vertical_visual(
-    lines: &[WrappedLine],
+    visual_lines: &[VisualLineRef],
+    blocks: &[EditorBlock],
     current_offset: usize,
     delta: isize,
-    line_height: Pixels,
 ) -> Option<usize> {
-    let visual_lines = collect_visual_lines(lines);
-    let current_visual_line = find_visual_line_ref(&visual_lines, current_offset)?;
+    let current_visual_line_idx = find_visual_line_ref(visual_lines, current_offset)?;
     let target_global_row = shift_visual_row(
-        visual_lines.get(current_visual_line)?.global_row,
+        visual_lines.get(current_visual_line_idx)?.global_row,
         delta,
         visual_lines.len(),
     )?;
-    let target_visual_line = visual_lines
+    let target_visual_line_idx = visual_lines
         .iter()
         .position(|line| line.global_row == target_global_row)?;
-    let current = visual_lines.get(current_visual_line)?;
-    let target = visual_lines.get(target_visual_line)?;
+    let current = &visual_lines[current_visual_line_idx];
+    let target = &visual_lines[target_visual_line_idx];
 
-    let current_local = current_offset.saturating_sub(current.global_start);
-    let current_point = current
-        .line
-        .position_for_index(current.wrapped_line_start + current_local, line_height)?;
+    let current_block = &blocks[current.block_index];
+    let target_block = &blocks[target.block_index];
 
-    let target_local = target
+    let current_rendered_offset =
+        current_block.source_to_rendered(current_offset - current_block.global_start);
+    let current_local = current_rendered_offset.saturating_sub(current.rendered_local_start);
+
+    let current_point = current.line.position_for_index(
+        current.wrapped_line_start + current_local,
+        current.line_height,
+    )?;
+
+    let target_local_rendered = target
         .line
         .closest_index_for_position(
             Point {
                 x: current_point.x,
-                y: line_height * target.local_row as f32,
+                y: target.line_height * target.local_row as f32,
             },
-            line_height,
+            target.line_height,
         )
         .unwrap_or_else(|index| index);
 
-    Some(target.global_start + target_local.saturating_sub(target.wrapped_line_start))
+    let target_rendered_offset = target.rendered_local_start
+        + target_local_rendered.saturating_sub(target.wrapped_line_start);
+
+    Some(target_block.global_start + target_block.rendered_to_source(target_rendered_offset))
 }
 
 pub fn visual_line_edge_offset(
@@ -185,10 +198,16 @@ pub fn visual_line_edge_offset(
     Some(if line_end { line.end } else { line.start })
 }
 
-fn collect_visual_lines(lines: &[WrappedLine]) -> Vec<VisualLineRef> {
+pub(crate) fn collect_visual_lines(
+    lines: &[WrappedLine],
+    line_height: Pixels,
+    block_index: usize,
+    global_start_base: usize,
+) -> Vec<VisualLineRef> {
     let mut visual = Vec::new();
-    let mut global_base = 0;
+    let mut global_base = global_start_base;
     let mut global_row = 0;
+    let mut current_y = Pixels::ZERO;
 
     for line in lines {
         let mut boundaries = line
@@ -206,13 +225,18 @@ fn collect_visual_lines(lines: &[WrappedLine]) -> Vec<VisualLineRef> {
             visual.push(VisualLineRef {
                 global_start: global_base + local_start,
                 global_end: global_base + local_end,
+                rendered_local_start: local_start,
                 wrapped_line_start: local_start,
                 local_row,
                 global_row,
+                y_offset: current_y,
+                line_height,
+                block_index,
                 line: line.clone(),
             });
             local_start = local_end;
             global_row += 1;
+            current_y += line_height;
         }
 
         global_base += line.text.len() + 1;
@@ -221,8 +245,8 @@ fn collect_visual_lines(lines: &[WrappedLine]) -> Vec<VisualLineRef> {
     visual
 }
 
-pub fn visual_line_ranges(lines: &[WrappedLine]) -> Vec<WrappedVisualLine> {
-    collect_visual_lines(lines)
+pub fn visual_line_ranges(lines: &[WrappedLine], line_height: Pixels) -> Vec<WrappedVisualLine> {
+    collect_visual_lines(lines, line_height, 0, 0)
         .into_iter()
         .map(|line| WrappedVisualLine {
             start: line.global_start,
@@ -249,40 +273,34 @@ fn shift_visual_row(current_row: usize, delta: isize, total_rows: usize) -> Opti
     (target < total_rows).then_some(target)
 }
 
-fn visual_row_for_y(y: Pixels, line_height: Pixels, total_rows: usize) -> Option<usize> {
-    let row = (y / line_height) as usize;
-    (row < total_rows).then_some(row)
-}
-
-#[allow(dead_code)]
 pub fn hit_test_visual_offset(
     visual_lines: &[VisualLineRef],
+    blocks: &[EditorBlock],
     point: Point<Pixels>,
-    line_height: Pixels,
 ) -> Option<usize> {
-    let global_row = visual_row_for_y(point.y, line_height, visual_lines.len())?;
     let line = visual_lines
         .iter()
-        .find(|line| line.global_row == global_row)?;
-
+        .find(|l| point.y >= l.y_offset && point.y < l.y_offset + l.line_height)?;
     let local = line
         .line
         .closest_index_for_position(
             Point {
                 x: point.x,
-                y: line_height * line.local_row as f32,
+                y: line.line_height * line.local_row as f32,
             },
-            line_height,
+            line.line_height,
         )
         .unwrap_or_else(|index| index);
 
-    Some(line.global_start + local.saturating_sub(line.wrapped_line_start))
+    let rendered_offset = line.rendered_local_start + local.saturating_sub(line.wrapped_line_start);
+    let block = &blocks[line.block_index];
+
+    Some(block.global_start + block.rendered_to_source(rendered_offset))
 }
 
 pub struct FocusedEditorElement {
-    text: SharedString,
+    blocks: Vec<EditorBlock>,
     style: FocusedEditorStyle,
-    runs: Vec<TextRun>,
     cursor: Option<CursorState>,
     cursor_visible: bool,
     selection_color: Hsla,
@@ -292,18 +310,16 @@ pub struct FocusedEditorElement {
 
 impl FocusedEditorElement {
     pub fn new(
-        text: impl Into<SharedString>,
+        blocks: Vec<EditorBlock>,
         style: FocusedEditorStyle,
-        runs: Vec<TextRun>,
         cursor: Option<CursorState>,
         cursor_visible: bool,
         selection_color: Hsla,
         cursor_color: Hsla,
     ) -> Self {
         Self {
-            text: text.into(),
+            blocks,
             style,
-            runs,
             cursor,
             cursor_visible,
             selection_color,
@@ -321,65 +337,177 @@ impl FocusedEditorElement {
     }
 }
 
-pub fn generate_unified_runs(
+#[derive(Clone)]
+pub struct EditorBlock {
+    pub text: String,
+    pub runs: Vec<TextRun>,
+    pub font_size: Pixels,
+    pub line_height: Pixels,
+    pub global_start: usize,
+    pub source_len: usize,
+    pub is_focused: bool,
+    pub kind: BlockKind,
+}
+
+impl EditorBlock {
+    pub fn source_to_rendered(&self, source_local: usize) -> usize {
+        if self.is_focused {
+            return source_local;
+        }
+        let prefix_len = self.source_len.saturating_sub(self.text.len());
+        source_local.saturating_sub(prefix_len).min(self.text.len())
+    }
+
+    pub fn rendered_to_source(&self, rendered_local: usize) -> usize {
+        if self.is_focused {
+            return rendered_local;
+        }
+        let prefix_len = self.source_len.saturating_sub(self.text.len());
+        (rendered_local + prefix_len).min(self.source_len)
+    }
+}
+
+pub fn generate_editor_blocks(
     doc: &DocumentModel,
     global_cursor: Option<usize>,
     style: &FocusedEditorStyle,
     theme: &Theme,
-) -> Vec<TextRun> {
-    let mut runs = Vec::new();
-
+) -> Vec<EditorBlock> {
+    let mut blocks = Vec::new();
     let focused_block_idx =
         global_cursor.and_then(|c| doc.global_offset_to_block_local(c).map(|(idx, _)| idx));
-
     let highlighter = SyntaxHighlighter::new_rust();
+    let mut current_global = 0;
 
     for (i, block) in doc.blocks().iter().enumerate() {
         let is_focused = focused_block_idx == Some(i);
+        let source_len = block.source.len();
 
-        if is_focused {
-            // Source Mode
+        let (text, font_size, line_height, runs) = if is_focused {
             let spans = highlighter.highlight(&block.source);
-            let mut block_runs = spans_to_runs(&spans, style, theme);
-            runs.append(&mut block_runs);
+            let runs = spans_to_runs(&spans, style, theme);
+            (
+                block.source.clone(),
+                style.font_size,
+                style.line_height,
+                runs,
+            )
         } else {
-            // Rich Text Mode (Simplified for now, just proportional font)
-            runs.push(TextRun {
-                len: block.source.len(),
+            let text = block.rendered.clone();
+
+            // Rich Text Styling based on BlockKind
+            let (size_mult, weight, color) = match &block.kind {
+                BlockKind::Heading { level: 1 } => {
+                    (2.0, FontWeight::BOLD, &theme.palette.text_primary)
+                }
+                BlockKind::Heading { level: 2 } => {
+                    (1.5, FontWeight::BOLD, &theme.palette.text_primary)
+                }
+                BlockKind::Heading { level: 3 } => {
+                    (1.25, FontWeight::BOLD, &theme.palette.text_primary)
+                }
+                BlockKind::Heading { .. } => (1.1, FontWeight::BOLD, &theme.palette.text_primary),
+                BlockKind::Quote => (1.0, FontWeight::NORMAL, &theme.palette.text_muted),
+                _ => (1.0, FontWeight::NORMAL, &theme.palette.text_primary),
+            };
+
+            let base_size = theme.typography.body_size as f32;
+            let font_size = px(base_size * size_mult);
+            let line_height = font_size * 1.5;
+
+            let runs = vec![TextRun {
+                len: text.len(),
                 font: Font {
                     family: "System UI".into(),
                     features: FontFeatures::default(),
                     fallbacks: None,
-                    weight: FontWeight::default(),
+                    weight,
                     style: FontStyle::default(),
                 },
-                color: rgb_hex(&theme.palette.text_primary),
+                color: rgb_hex(color),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
-            });
-        }
+            }];
+            (text, font_size, line_height, runs)
+        };
 
-        // Add spacing runs for block separation if it's not the last block
-        if i < doc.blocks().len() - 1 {
-            runs.push(TextRun {
-                len: 2, // "\n\n"
-                font: Font {
-                    family: style.font_family.into(),
-                    features: FontFeatures::default(),
-                    fallbacks: None,
-                    weight: FontWeight::default(),
-                    style: FontStyle::default(),
-                },
-                color: gpui::rgba(0x00000000).into(), // Transparent
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            });
-        }
+        blocks.push(EditorBlock {
+            text,
+            runs,
+            font_size,
+            line_height,
+            global_start: current_global,
+            source_len,
+            is_focused,
+            kind: block.kind.clone(),
+        });
+
+        current_global += source_len + 2; // +2 for \n\n
     }
 
-    runs
+    blocks
+}
+
+pub fn layout_editor_blocks(
+    window: &mut Window,
+    blocks: &[EditorBlock],
+    wrap_width: Pixels,
+) -> Vec<VisualLineRef> {
+    let mut visual_lines = Vec::new();
+    let mut current_y = Pixels::ZERO;
+    let mut global_row = 0;
+
+    for (block_idx, block) in blocks.iter().enumerate() {
+        let lines = window
+            .text_system()
+            .shape_text(
+                SharedString::from(block.text.clone()),
+                block.font_size,
+                &block.runs,
+                Some(wrap_width),
+                None,
+            )
+            .unwrap_or_default()
+            .into_vec();
+
+        let mut block_rendered_base = 0;
+        for line in &lines {
+            let mut boundaries = line
+                .wrap_boundaries()
+                .iter()
+                .map(|b| line.runs()[b.run_ix].glyphs[b.glyph_ix].index)
+                .collect::<Vec<_>>();
+            boundaries.push(line.len());
+
+            let mut local_start = 0;
+            for (local_row, local_end) in boundaries.into_iter().enumerate() {
+                let text_start = block_rendered_base + local_start;
+                let text_end = block_rendered_base + local_end;
+
+                visual_lines.push(VisualLineRef {
+                    global_start: block.global_start + block.rendered_to_source(text_start),
+                    global_end: block.global_start + block.rendered_to_source(text_end),
+                    rendered_local_start: text_start,
+                    wrapped_line_start: local_start,
+                    local_row,
+                    global_row,
+                    y_offset: current_y,
+                    line_height: block.line_height,
+                    block_index: block_idx,
+                    line: line.clone(),
+                });
+                local_start = local_end;
+                global_row += 1;
+                current_y += block.line_height;
+            }
+            block_rendered_base += line.text.len() + 1;
+        }
+        // Block spacing
+        current_y += block.line_height;
+    }
+
+    visual_lines
 }
 
 pub struct FocusedEditorState {
@@ -408,25 +536,19 @@ impl Element for FocusedEditorElement {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let style = Style::default();
         let wrap_width = approximate_editor_wrap_width(window.bounds().size.width);
-        let lines = window
-            .text_system()
-            .shape_text(
-                self.text.clone(),
-                self.style.font_size,
-                &self.runs,
-                Some(wrap_width),
-                None,
-            )
-            .unwrap_or_default()
-            .into_vec();
+
+        let visual_lines = layout_editor_blocks(window, &self.blocks, wrap_width);
+        let all_lines = visual_lines
+            .iter()
+            .filter(|l| l.local_row == 0)
+            .map(|l| l.line.clone())
+            .collect();
 
         let layout_id = window.request_layout(style, None, cx);
-
-        let visual_lines = collect_visual_lines(&lines);
         (
             layout_id,
             FocusedEditorState {
-                lines,
+                lines: all_lines,
                 visual_lines,
             },
         )
@@ -454,9 +576,7 @@ impl Element for FocusedEditorElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let lines = &request_layout_state.lines;
         let visual_lines = &request_layout_state.visual_lines;
-        let line_height = self.style.line_height;
 
         let padding = Point {
             x: self.style.padding_x,
@@ -482,10 +602,15 @@ impl Element for FocusedEditorElement {
                 let overlap_end = end.min(visual_line.global_end);
 
                 if overlap_start < overlap_end {
-                    let local_start =
-                        visual_line.wrapped_line_start + (overlap_start - visual_line.global_start);
-                    let local_end =
-                        visual_line.wrapped_line_start + (overlap_end - visual_line.global_start);
+                    let block = &self.blocks[visual_line.block_index];
+                    let rendered_start =
+                        block.source_to_rendered(overlap_start - block.global_start);
+                    let rendered_end = block.source_to_rendered(overlap_end - block.global_start);
+
+                    let local_start = visual_line.wrapped_line_start
+                        + (rendered_start - visual_line.rendered_local_start);
+                    let local_end = visual_line.wrapped_line_start
+                        + (rendered_end - visual_line.rendered_local_start);
 
                     let x_start = visual_line.line.unwrapped_layout.x_for_index(local_start);
                     let x_end = visual_line.line.unwrapped_layout.x_for_index(local_end);
@@ -494,9 +619,9 @@ impl Element for FocusedEditorElement {
                         origin: text_bounds.origin
                             + Point {
                                 x: x_start,
-                                y: line_height * visual_line.global_row as f32,
+                                y: visual_line.y_offset,
                             },
-                        size: gpui::size(x_end - x_start, line_height),
+                        size: gpui::size(x_end - x_start, visual_line.line_height),
                     };
 
                     window.paint_quad(gpui::fill(selection_bounds, self.selection_color));
@@ -505,22 +630,25 @@ impl Element for FocusedEditorElement {
         }
 
         // 2. Paint Text
-        let mut y_offset = Pixels::ZERO;
-        for line in lines.iter() {
-            line.paint(
-                text_bounds.origin
-                    + Point {
-                        x: Pixels::ZERO,
-                        y: y_offset,
-                    },
-                line_height,
-                TextAlign::Left,
-                None,
-                window,
-                cx,
-            )
-            .ok();
-            y_offset += line_height;
+        for visual_line in visual_lines {
+            // Only paint the first row of each WrappedLine to avoid over-painting
+            if visual_line.local_row == 0 {
+                visual_line
+                    .line
+                    .paint(
+                        text_bounds.origin
+                            + Point {
+                                x: Pixels::ZERO,
+                                y: visual_line.y_offset,
+                            },
+                        visual_line.line_height,
+                        TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    )
+                    .ok();
+            }
         }
 
         // 3. Paint Caret
@@ -529,8 +657,10 @@ impl Element for FocusedEditorElement {
         {
             if let Some(visual_line_idx) = find_visual_line_ref(&visual_lines, cursor.head) {
                 let visual_line = &visual_lines[visual_line_idx];
-                let local_offset =
-                    visual_line.wrapped_line_start + (cursor.head - visual_line.global_start);
+                let block = &self.blocks[visual_line.block_index];
+                let rendered_head = block.source_to_rendered(cursor.head - block.global_start);
+                let local_offset = visual_line.wrapped_line_start
+                    + (rendered_head - visual_line.rendered_local_start);
 
                 let x = visual_line.line.unwrapped_layout.x_for_index(local_offset);
 
@@ -538,9 +668,9 @@ impl Element for FocusedEditorElement {
                     origin: text_bounds.origin
                         + Point {
                             x,
-                            y: line_height * visual_line.global_row as f32,
+                            y: visual_line.y_offset,
                         },
-                    size: gpui::size(self.style.caret_width, line_height),
+                    size: gpui::size(self.style.caret_width, visual_line.line_height),
                 };
 
                 window.paint_quad(gpui::fill(caret_bounds, self.cursor_color));
@@ -550,18 +680,19 @@ impl Element for FocusedEditorElement {
         // 4. Handle Interactivity (Clicks and Drags)
         if let Some(on_cursor_move) = &self.on_cursor_move {
             let on_cursor_move = on_cursor_move.clone();
-            let line_height = self.style.line_height;
             let visual_lines = visual_lines.clone();
+            let blocks = self.blocks.clone();
 
             // Mouse Down: Set anchor and head
             let on_cursor_move_down = on_cursor_move.clone();
             let visual_lines_down = visual_lines.clone();
+            let blocks_down = blocks.clone();
             window.on_mouse_event(
                 move |event: &MouseDownEvent, phase: DispatchPhase, window, cx| {
                     if phase == DispatchPhase::Bubble && bounds.contains(&event.position) {
                         let local_point = event.position - text_bounds.origin;
                         if let Some(offset) =
-                            hit_test_visual_offset(&visual_lines_down, local_point, line_height)
+                            hit_test_visual_offset(&visual_lines_down, &blocks_down, local_point)
                         {
                             on_cursor_move_down(offset, event.modifiers.shift, window, cx);
                         } else {
@@ -575,6 +706,7 @@ impl Element for FocusedEditorElement {
             // Mouse Move (Drag): Update head only
             let on_cursor_move_drag = on_cursor_move.clone();
             let visual_lines_drag = visual_lines.clone();
+            let blocks_drag = blocks.clone();
             window.on_mouse_event(
                 move |event: &MouseMoveEvent, phase: DispatchPhase, window, cx| {
                     if phase == DispatchPhase::Bubble
@@ -582,7 +714,7 @@ impl Element for FocusedEditorElement {
                     {
                         let local_point = event.position - text_bounds.origin;
                         if let Some(offset) =
-                            hit_test_visual_offset(&visual_lines_drag, local_point, line_height)
+                            hit_test_visual_offset(&visual_lines_drag, &blocks_drag, local_point)
                         {
                             on_cursor_move_drag(offset, true, window, cx);
                         } else if local_point.y < Pixels::ZERO {
@@ -666,18 +798,54 @@ mod tests {
     }
 
     #[test]
-    fn test_unified_text_run_generation() {
+    fn test_editor_block_generation() {
         let doc = DocumentModel::from_markdown("# H1\n\nText");
         let theme = Theme::sola_dark();
         let style = FocusedEditorStyle::from_theme(&theme);
 
         // Cursor at 0 (inside H1), H1 is Source, Text is Rich
-        let runs = generate_unified_runs(&doc, Some(0), &style, &theme);
+        let blocks = generate_editor_blocks(&doc, Some(0), &style, &theme);
 
-        // Total runs should cover "# H1\n\nText"
-        // "# H1" (4) + "\n\n" (2) + "Text" (4) = 10
-        let total_len: usize = runs.iter().map(|r| r.len).sum();
-        assert_eq!(total_len, 10);
-        assert!(!runs.is_empty());
+        assert_eq!(blocks.len(), 2);
+        assert!(blocks[0].is_focused);
+        assert!(!blocks[1].is_focused);
+        
+        // Block 0: "# H1" (source)
+        assert_eq!(blocks[0].text, "# H1");
+        // Block 1: "Text" (rendered)
+        assert_eq!(blocks[1].text, "Text");
+    }
+
+    #[test]
+    fn test_editor_block_offset_mapping() {
+        // Focused block (1:1 mapping)
+        let focused = EditorBlock {
+            text: "# H1".into(),
+            runs: vec![],
+            font_size: gpui::px(14.0),
+            line_height: gpui::px(20.0),
+            global_start: 0,
+            source_len: 4,
+            is_focused: true,
+            kind: sola_document::BlockKind::Heading { level: 1 },
+        };
+        assert_eq!(focused.rendered_to_source(2), 2);
+        assert_eq!(focused.source_to_rendered(2), 2);
+
+        // Blurred block (Prefix hidden mapping)
+        let blurred = EditorBlock {
+            text: "H1".into(), // rendered
+            runs: vec![],
+            font_size: gpui::px(28.0),
+            line_height: gpui::px(36.0),
+            global_start: 0,
+            source_len: 4, // "# H1"
+            is_focused: false,
+            kind: sola_document::BlockKind::Heading { level: 1 },
+        };
+        // Index 0 in "H1" is index 2 in "# H1"
+        assert_eq!(blurred.rendered_to_source(0), 2);
+        // Index 1 in "# H1" (the space) clamps to 0 in "H1"
+        assert_eq!(blurred.source_to_rendered(1), 0);
     }
 }
