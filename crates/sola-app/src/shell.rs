@@ -998,6 +998,7 @@ impl SolaRoot {
 
         let editor_element = FocusedEditorElement::new(
             blocks,
+            self.typst_cache.clone(),
             editor_style,
             Some(CursorState {
                 head: global_cursor_head,

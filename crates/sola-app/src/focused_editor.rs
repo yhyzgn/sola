@@ -304,6 +304,7 @@ pub fn hit_test_visual_offset(
 
 pub struct FocusedEditorElement {
     blocks: Vec<EditorBlock>,
+    typst_cache: HashMap<String, TypstAdapter>,
     style: FocusedEditorStyle,
     cursor: Option<CursorState>,
     cursor_visible: bool,
@@ -315,6 +316,7 @@ pub struct FocusedEditorElement {
 impl FocusedEditorElement {
     pub fn new(
         blocks: Vec<EditorBlock>,
+        typst_cache: HashMap<String, TypstAdapter>,
         style: FocusedEditorStyle,
         cursor: Option<CursorState>,
         cursor_visible: bool,
@@ -323,6 +325,7 @@ impl FocusedEditorElement {
     ) -> Self {
         Self {
             blocks,
+            typst_cache,
             style,
             cursor,
             cursor_visible,
@@ -341,6 +344,13 @@ impl FocusedEditorElement {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct InlineDecoration {
+    pub start: usize,
+    pub end: usize,
+    pub cache_key: String,
+}
+
 #[derive(Clone)]
 pub struct EditorBlock {
     pub text: String,
@@ -350,23 +360,60 @@ pub struct EditorBlock {
     pub global_start: usize,
     pub source_len: usize,
     pub is_focused: bool,
+    pub kind: BlockKind,
+    pub inline_math: Vec<InlineDecoration>,
 }
 
 impl EditorBlock {
     pub fn source_to_rendered(&self, source_local: usize) -> usize {
-        if self.is_focused {
+        if self.is_focused || self.inline_math.is_empty() {
             return source_local;
         }
-        let prefix_len = self.source_len.saturating_sub(self.text.len());
-        source_local.saturating_sub(prefix_len).min(self.text.len())
+
+        let mut rendered_offset = 0;
+        let mut last_source_pos = 0;
+
+        for deco in &self.inline_math {
+            if source_local < deco.start {
+                rendered_offset += source_local - last_source_pos;
+                return rendered_offset;
+            }
+            rendered_offset += deco.start - last_source_pos;
+            if source_local <= deco.end {
+                // Inside a formula, clamp to the placeholder position
+                return rendered_offset;
+            }
+            rendered_offset += 1; // The placeholder \u{FFFC}
+            last_source_pos = deco.end;
+        }
+
+        rendered_offset + (source_local - last_source_pos)
     }
 
     pub fn rendered_to_source(&self, rendered_local: usize) -> usize {
-        if self.is_focused {
+        if self.is_focused || self.inline_math.is_empty() {
             return rendered_local;
         }
-        let prefix_len = self.source_len.saturating_sub(self.text.len());
-        (rendered_local + prefix_len).min(self.source_len)
+
+        let mut current_rendered = 0;
+        let mut current_source = 0;
+
+        for deco in &self.inline_math {
+            let gap = deco.start - current_source;
+            if rendered_local < current_rendered + gap {
+                return current_source + (rendered_local - current_rendered);
+            }
+            current_rendered += gap;
+            current_source += gap;
+
+            if rendered_local == current_rendered {
+                return deco.start; // Start of placeholder maps to start of formula
+            }
+            current_rendered += 1;
+            current_source = deco.end;
+        }
+
+        current_source + (rendered_local - current_rendered)
     }
 }
 
@@ -386,7 +433,7 @@ pub fn generate_editor_blocks(
         let is_focused = focused_block_idx == Some(i);
         let source_len = block.source.len();
 
-        let (text, font_size, line_height, runs) = if is_focused {
+        let (text, font_size, line_height, runs, inline_math) = if is_focused {
             let spans = highlighter.highlight(&block.source);
             let runs = spans_to_runs(&spans, style, theme);
             (
@@ -394,11 +441,44 @@ pub fn generate_editor_blocks(
                 style.font_size,
                 style.line_height,
                 runs,
+                Vec::new(),
             )
         } else {
-            let text = block.rendered.clone();
+            let mut text = String::new();
+            let mut inline_math = Vec::new();
+            let mut last_pos = 0;
 
-            // Rich Text Styling based on BlockKind
+            // Simple scanner for $...$
+            let bytes = block.source.as_bytes();
+            let mut pos = 0;
+            while pos < bytes.len() {
+                if bytes[pos] == b'$' && (pos == 0 || bytes[pos - 1] != b'\\') {
+                    if let Some(end_rel) = block.source[pos + 1..].find('$') {
+                        let end = pos + 1 + end_rel;
+                        let formula = &block.source[pos + 1..end];
+                        if !formula.contains('\n') && !formula.is_empty() {
+                            // Found valid inline math
+                            text.push_str(&block.source[last_pos..pos]);
+                            let placeholder_start = text.len();
+                            text.push('\u{FFFC}'); // Placeholder
+                            
+                            inline_math.push(InlineDecoration {
+                                start: pos,
+                                end: end + 1,
+                                cache_key: format!("math::{}", formula),
+                            });
+                            
+                            pos = end + 1;
+                            last_pos = pos;
+                            continue;
+                        }
+                    }
+                }
+                pos += 1;
+            }
+            text.push_str(&block.source[last_pos..]);
+
+            // Styling
             let (size_mult, weight, color) = match &block.kind {
                 BlockKind::Heading { level: 1 } => {
                     (2.0, FontWeight::BOLD, &theme.palette.text_primary)
@@ -432,7 +512,7 @@ pub fn generate_editor_blocks(
                 underline: None,
                 strikethrough: None,
             }];
-            (text, font_size, line_height, runs)
+            (text, font_size, line_height, runs, inline_math)
         };
 
         blocks.push(EditorBlock {
@@ -443,9 +523,11 @@ pub fn generate_editor_blocks(
             global_start: current_global,
             source_len,
             is_focused,
+            kind: block.kind.clone(),
+            inline_math,
         });
 
-        current_global += source_len + 2; // +2 for \n\n
+        current_global += source_len + 2;
     }
 
     blocks
@@ -594,7 +676,57 @@ impl Element for FocusedEditorElement {
             ),
         };
 
-        // 1. Paint Selection
+        // 1. Paint Block Decorations (Backgrounds, Border, etc.)
+        for (block_idx, block) in self.blocks.iter().enumerate() {
+            if !block.is_focused {
+                let block_visuals: Vec<_> = visual_lines
+                    .iter()
+                    .filter(|l| l.block_index == block_idx)
+                    .collect();
+
+                if let (Some(first), Some(last)) = (block_visuals.first(), block_visuals.last()) {
+                    match &block.kind {
+                        BlockKind::Quote => {
+                            let quote_bar_bounds = Bounds {
+                                origin: text_bounds.origin
+                                    + Point {
+                                        x: px(-14.0),
+                                        y: first.y_offset,
+                                    },
+                                size: gpui::size(
+                                    px(4.0),
+                                    last.y_offset + last.line_height - first.y_offset,
+                                ),
+                            };
+                            window.paint_quad(gpui::fill(
+                                quote_bar_bounds,
+                                gpui::rgb(0x4a90e2), // Quote bar color
+                            ));
+                        }
+                        BlockKind::CodeFence { .. } | BlockKind::TypstBlock => {
+                            let bg_bounds = Bounds {
+                                origin: text_bounds.origin
+                                    + Point {
+                                        x: px(-8.0),
+                                        y: first.y_offset - px(4.0),
+                                    },
+                                size: gpui::size(
+                                    bounds.size.width - self.style.padding_x,
+                                    last.y_offset + last.line_height - first.y_offset + px(8.0),
+                                ),
+                            };
+                            window.paint_quad(gpui::fill(
+                                bg_bounds,
+                                gpui::rgba(0x00000018), // Subtle background
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        // 2. Paint Selection
         if let Some(cursor) = &self.cursor
             && let Some(anchor) = cursor.anchor
         {
@@ -633,7 +765,7 @@ impl Element for FocusedEditorElement {
             }
         }
 
-        // 2. Paint Text
+        // 2. Paint Text and Inline Math
         for visual_line in visual_lines {
             // Only paint the first row of each WrappedLine to avoid over-painting
             if visual_line.local_row == 0 {
@@ -652,6 +784,36 @@ impl Element for FocusedEditorElement {
                         cx,
                     )
                     .ok();
+            }
+
+            // Paint Inline Math SVGs
+            let block = &self.blocks[visual_line.block_index];
+            for deco in &block.inline_math {
+                let rendered_pos = block.source_to_rendered(deco.start);
+                if rendered_pos >= visual_line.rendered_local_start
+                    && rendered_pos < visual_line.global_end.saturating_sub(block.global_start)
+                {
+                    // This line contains the placeholder \u{FFFC}
+                    let local_offset =
+                        visual_line.wrapped_line_start + (rendered_pos - visual_line.rendered_local_start);
+                    let x = visual_line.line.unwrapped_layout.x_for_index(local_offset);
+
+                    if let Some(TypstAdapter::Rendered { svg }) = self.typst_cache.get(&deco.cache_key) {
+                        let svg_bounds = Bounds {
+                            origin: text_bounds.origin
+                                + Point {
+                                    x,
+                                    y: visual_line.y_offset + px(2.0), // Slight vertical alignment
+                                },
+                            size: gpui::size(px(40.0), visual_line.line_height - px(4.0)), // Placeholder size
+                        };
+                        
+                        let _ = window.paint_svg(
+                            svg_bounds,
+                            svg.clone().into(),
+                        );
+                    }
+                }
             }
         }
 
