@@ -2,12 +2,13 @@ use gpui::{
     App, Bounds, DispatchPhase, Element, ElementId, Font, FontFeatures, FontStyle, FontWeight,
     GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
     MouseMoveEvent, Pixels, Point, SharedString, Style, TextAlign, TextRun, Window, WrappedLine,
-    px,
+    px, TransformationMatrix,
 };
-use sola_document::{BlockKind, CursorState, DocumentModel};
+use sola_document::{BlockKind, CursorState, DocumentModel, TypstAdapter};
 use sola_document::highlighter::{HighlightKind, HighlightedSpan, SyntaxHighlighter};
 use sola_theme::{Theme, parse_hex_color};
 use std::sync::Arc;
+use std::collections::HashMap;
 
 fn rgb_hex(hex: &str) -> Hsla {
     gpui::rgb(parse_hex_color(hex).unwrap_or(0xffffff)).into()
@@ -628,7 +629,7 @@ impl Element for FocusedEditorElement {
             + px(100.0); // Add bottom padding
 
         let mut style = Style::default();
-        style.size.width = gpui::RelativeSize::Relative(1.0).into();
+        style.size.width = gpui::relative(1.0).into();
         style.size.height = total_height.into();
 
         let layout_id = window.request_layout(style, None, cx);
@@ -811,6 +812,9 @@ impl Element for FocusedEditorElement {
                         let _ = window.paint_svg(
                             svg_bounds,
                             svg.clone().into(),
+                            TransformationMatrix::default(),
+                            gpui::white(),
+                            cx,
                         );
                     }
                 }

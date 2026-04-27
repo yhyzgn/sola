@@ -1393,6 +1393,8 @@ impl SolaRoot {
             global_start: 0,
             source_len: text.len(),
             is_focused: true,
+            kind: BlockKind::Paragraph,
+            inline_math: Vec::new(),
         }];
 
         move_cursor_vertical_visual(&visual_lines, &blocks, cursor.head, delta)
