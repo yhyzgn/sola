@@ -994,7 +994,8 @@ fn adapt_html(source: &str) -> Option<HtmlAdapter> {
             } else if char_at == b'$' {
                 // Potential inline math
                 let math_start = &remaining[start..];
-                if !math_start.starts_with("$$") { // Avoid block math here
+                if !math_start.starts_with("$$") {
+                    // Avoid block math here
                     let after_dollar = &math_start[1..];
                     if let Some(close_idx) = find_closing_dollar(after_dollar) {
                         let math_content = &after_dollar[..close_idx];
@@ -1005,10 +1006,10 @@ fn adapt_html(source: &str) -> Option<HtmlAdapter> {
                     }
                 }
             }
-            
+
             // If we didn't handle the special char, treat it as text
-            nodes.push(HtmlNode::Text(remaining[start..start+1].to_string()));
-            remaining = &remaining[start+1..];
+            nodes.push(HtmlNode::Text(remaining[start..start + 1].to_string()));
+            remaining = &remaining[start + 1..];
         } else {
             nodes.push(HtmlNode::Text(remaining.to_string()));
             break;

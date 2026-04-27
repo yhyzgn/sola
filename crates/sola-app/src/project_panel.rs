@@ -1,11 +1,11 @@
-use sola_document::DocumentModel;
 use crate::workspace::{Workspace, WorkspaceEvent};
 use crate::worktree::{Entry, WorktreeEvent};
 use gpui::prelude::*;
 use gpui::{
-    div, px, App, Context, Div, Entity, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Point, Pixels, Render, Styled, WeakEntity,
+    App, Context, Div, Entity, InteractiveElement, IntoElement, MouseButton, ParentElement, Pixels,
+    Point, Render, Styled, WeakEntity, div, px,
 };
+use sola_document::DocumentModel;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -55,9 +55,11 @@ impl ProjectPanel {
 
     pub fn set_handle(&mut self, handle: WeakEntity<Self>, cx: &mut Context<Self>) {
         self.this_handle = Some(handle);
-        
+
         cx.subscribe(&self.workspace, |this, _workspace, event, cx| match event {
-            WorkspaceEvent::DocumentChanged | WorkspaceEvent::ThemeChanged | WorkspaceEvent::ActiveTabChanged => {
+            WorkspaceEvent::DocumentChanged
+            | WorkspaceEvent::ThemeChanged
+            | WorkspaceEvent::ActiveTabChanged => {
                 cx.notify();
             }
             WorkspaceEvent::WorktreeChanged => {
@@ -98,10 +100,10 @@ impl ProjectPanel {
             let background = cx.background_executor().clone();
             async move {
                 if let Ok(content) = std::fs::read_to_string(&path) {
-                    let document = background.spawn(async move {
-                        DocumentModel::from_markdown(content)
-                    }).await;
-                    
+                    let document = background
+                        .spawn(async move { DocumentModel::from_markdown(content) })
+                        .await;
+
                     let _ = cx.update(|cx| {
                         workspace.update(cx, |workspace, cx| {
                             workspace.open_file(path, document, cx);
@@ -109,10 +111,16 @@ impl ProjectPanel {
                     });
                 }
             }
-        }).detach();
+        })
+        .detach();
     }
 
-    fn show_context_menu(&mut self, path: PathBuf, position: Point<Pixels>, cx: &mut Context<Self>) {
+    fn show_context_menu(
+        &mut self,
+        path: PathBuf,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         self.context_menu = Some(ContextMenuState { path, position });
         cx.notify();
     }
@@ -122,7 +130,13 @@ impl ProjectPanel {
         cx.notify();
     }
 
-    fn start_input(&mut self, action: InputAction, initial_value: String, window: &mut gpui::Window, cx: &mut Context<Self>) {
+    fn start_input(
+        &mut self,
+        action: InputAction,
+        initial_value: String,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle);
         self.input_state = Some(InputState {
@@ -140,15 +154,18 @@ impl ProjectPanel {
             if !value.is_empty() {
                 match state.action {
                     InputAction::CreateFile(parent) => {
-                        self.workspace.update(cx, |w, _cx| w.create_file(parent, value));
+                        self.workspace
+                            .update(cx, |w, _cx| w.create_file(parent, value));
                     }
                     InputAction::CreateDir(parent) => {
-                        self.workspace.update(cx, |w, _cx| w.create_dir(parent, value));
+                        self.workspace
+                            .update(cx, |w, _cx| w.create_dir(parent, value));
                     }
                     InputAction::Rename(old_path) => {
                         let mut new_path = old_path.clone();
                         new_path.set_file_name(value);
-                        self.workspace.update(cx, |w, _cx| w.rename_entry(old_path, new_path));
+                        self.workspace
+                            .update(cx, |w, _cx| w.rename_entry(old_path, new_path));
                     }
                 }
             }
@@ -188,22 +205,56 @@ impl ProjectPanel {
             .min_w(px(160.0))
             .flex()
             .flex_col()
-            .child(self.render_menu_item("New File", move |this, window, cx| {
-                this.start_input(InputAction::CreateFile(new_file_path.clone()), "untitled.md".to_string(), window, cx);
-            }, cx))
-            .child(self.render_menu_item("New Folder", move |this, window, cx| {
-                this.start_input(InputAction::CreateDir(new_folder_path.clone()), "new_folder".to_string(), window, cx);
-            }, cx))
-            .child(self.render_menu_item("Rename", move |this, window, cx| {
-                let name = rename_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                this.start_input(InputAction::Rename(rename_path.clone()), name, window, cx);
-            }, cx))
-            .child(div().h(px(1.0)).bg(crate::shell::rgb_hex(&theme.palette.panel_border)).my(px(4.0)))
-            .child(self.render_menu_item("Delete", move |this, _window, cx| {
-                this.workspace.update(cx, |workspace, _cx| {
-                    workspace.delete_entry(delete_path.clone());
-                });
-            }, cx))
+            .child(self.render_menu_item(
+                "New File",
+                move |this, window, cx| {
+                    this.start_input(
+                        InputAction::CreateFile(new_file_path.clone()),
+                        "untitled.md".to_string(),
+                        window,
+                        cx,
+                    );
+                },
+                cx,
+            ))
+            .child(self.render_menu_item(
+                "New Folder",
+                move |this, window, cx| {
+                    this.start_input(
+                        InputAction::CreateDir(new_folder_path.clone()),
+                        "new_folder".to_string(),
+                        window,
+                        cx,
+                    );
+                },
+                cx,
+            ))
+            .child(self.render_menu_item(
+                "Rename",
+                move |this, window, cx| {
+                    let name = rename_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    this.start_input(InputAction::Rename(rename_path.clone()), name, window, cx);
+                },
+                cx,
+            ))
+            .child(
+                div()
+                    .h(px(1.0))
+                    .bg(crate::shell::rgb_hex(&theme.palette.panel_border))
+                    .my(px(4.0)),
+            )
+            .child(self.render_menu_item(
+                "Delete",
+                move |this, _window, cx| {
+                    this.workspace.update(cx, |workspace, _cx| {
+                        workspace.delete_entry(delete_path.clone());
+                    });
+                },
+                cx,
+            ))
     }
 
     fn render_menu_item(
@@ -217,15 +268,14 @@ impl ProjectPanel {
             .py(px(6.0))
             .rounded(px(4.0))
             .hover(|s| s.bg(crate::shell::rgb_hex("#3a3a3a")))
-            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _event, window, cx| {
-                on_click(this, window, cx);
-                this.hide_context_menu(cx);
-            }))
-            .child(
-                div()
-                    .text_size(px(13.0))
-                    .child(label)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _event, window, cx| {
+                    on_click(this, window, cx);
+                    this.hide_context_menu(cx);
+                }),
             )
+            .child(div().text_size(px(13.0)).child(label))
     }
 
     fn render_input_modal(&self, state: &InputState, cx: &mut Context<Self>) -> Div {
@@ -244,9 +294,12 @@ impl ProjectPanel {
             .flex()
             .items_center()
             .justify_center()
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                this.cancel_input(cx);
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.cancel_input(cx);
+                }),
+            )
             .child(
                 div()
                     .w(px(400.0))
@@ -279,7 +332,7 @@ impl ProjectPanel {
                                 div()
                                     .text_size(px(14.0))
                                     .text_color(crate::shell::rgb_hex(&theme.palette.text_primary))
-                                    .child(state.value.clone())
+                                    .child(state.value.clone()),
                             )
                             .child(
                                 // Blinking cursor
@@ -287,28 +340,30 @@ impl ProjectPanel {
                                     .w(px(2.0))
                                     .h(px(16.0))
                                     .bg(crate::shell::rgb_hex(&theme.palette.accent))
-                                    .ml(px(2.0))
-                            )
+                                    .ml(px(2.0)),
+                            ),
                     )
-                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _window, cx| {
-                        let key = event.keystroke.key.as_str();
-                        if let Some(state) = &mut this.input_state {
-                            match key {
-                                "enter" => this.finish_input(cx),
-                                "escape" => this.cancel_input(cx),
-                                "backspace" => {
-                                    state.value.pop();
-                                    cx.notify();
-                                }
-                                _ => {
-                                    if let Some(ch) = &event.keystroke.key_char {
-                                        state.value.push_str(ch);
+                    .on_key_down(cx.listener(
+                        move |this, event: &gpui::KeyDownEvent, _window, cx| {
+                            let key = event.keystroke.key.as_str();
+                            if let Some(state) = &mut this.input_state {
+                                match key {
+                                    "enter" => this.finish_input(cx),
+                                    "escape" => this.cancel_input(cx),
+                                    "backspace" => {
+                                        state.value.pop();
                                         cx.notify();
+                                    }
+                                    _ => {
+                                        if let Some(ch) = &event.keystroke.key_char {
+                                            state.value.push_str(ch);
+                                            cx.notify();
+                                        }
                                     }
                                 }
                             }
-                        }
-                    }))
+                        },
+                    )),
             )
     }
 
@@ -338,19 +393,35 @@ impl ProjectPanel {
     fn render_mode_toggle(&self, cx: &mut Context<Self>) -> Div {
         let theme = self.workspace.read(cx).theme();
         let mode = self.mode;
-        
+
         div()
             .flex()
             .bg(crate::shell::rgb_hex(&theme.palette.panel_background))
             .border_b_1()
             .border_color(crate::shell::rgb_hex(&theme.palette.panel_border))
-            .child(self.render_mode_button("FILES", mode == SidebarMode::Files, SidebarMode::Files, cx))
-            .child(self.render_mode_button("OUTLINE", mode == SidebarMode::Outline, SidebarMode::Outline, cx))
+            .child(self.render_mode_button(
+                "FILES",
+                mode == SidebarMode::Files,
+                SidebarMode::Files,
+                cx,
+            ))
+            .child(self.render_mode_button(
+                "OUTLINE",
+                mode == SidebarMode::Outline,
+                SidebarMode::Outline,
+                cx,
+            ))
     }
 
-    fn render_mode_button(&self, label: &'static str, is_active: bool, mode: SidebarMode, cx: &mut Context<Self>) -> Div {
+    fn render_mode_button(
+        &self,
+        label: &'static str,
+        is_active: bool,
+        mode: SidebarMode,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let theme = self.workspace.read(cx).theme();
-        
+
         div()
             .flex_1()
             .py(px(10.0))
@@ -358,72 +429,91 @@ impl ProjectPanel {
             .justify_center()
             .cursor_pointer()
             .border_b_1()
-            .border_color(if is_active { crate::shell::rgb_hex(&theme.palette.accent) } else { gpui::hsla(0.0, 0.0, 0.0, 0.0) })
+            .border_color(if is_active {
+                crate::shell::rgb_hex(&theme.palette.accent)
+            } else {
+                gpui::hsla(0.0, 0.0, 0.0, 0.0)
+            })
             .hover(|s| s.bg(crate::shell::rgb_hex(&theme.palette.code_background)))
-            .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                this.mode = mode;
-                cx.notify();
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.mode = mode;
+                    cx.notify();
+                }),
+            )
             .child(
                 div()
                     .text_size(px(11.0))
                     .font_weight(gpui::FontWeight::BOLD)
-                    .text_color(if is_active { crate::shell::rgb_hex(&theme.palette.text_primary) } else { crate::shell::rgb_hex(&theme.palette.text_muted) })
-                    .child(label)
+                    .text_color(if is_active {
+                        crate::shell::rgb_hex(&theme.palette.text_primary)
+                    } else {
+                        crate::shell::rgb_hex(&theme.palette.text_muted)
+                    })
+                    .child(label),
             )
     }
 
     fn render_outline(&self, cx: &mut Context<Self>) -> Div {
         let workspace = self.workspace.read(cx);
         let Some(document) = workspace.active_document_ref() else {
-            return div().p(px(16.0)).text_color(crate::shell::rgb_hex("#888888")).child("No document open");
+            return div()
+                .p(px(16.0))
+                .text_color(crate::shell::rgb_hex("#888888"))
+                .child("No document open");
         };
-        
+
         let headings = document.get_headings();
         if headings.is_empty() {
-            return div().p(px(16.0)).text_color(crate::shell::rgb_hex("#888888")).child("No headings found");
+            return div()
+                .p(px(16.0))
+                .text_color(crate::shell::rgb_hex("#888888"))
+                .child("No headings found");
         }
 
         let theme = workspace.theme().clone();
         let this_handle = self.this_handle.clone();
-        
-        div().flex_1().child(
-            gpui::list(
-                gpui::ListState::new(headings.len(), gpui::ListAlignment::Top, px(100.0)),
-                move |idx, _window, _cx| {
-                    let (block_index, level, title) = &headings[idx];
-                    let block_index = *block_index;
-                    let level = *level;
-                    let title = title.clone();
-                    
-                    let handle = this_handle.clone();
-                    
-                    div()
-                        .px(px(16.0))
-                        .pl(px(16.0 + (level.saturating_sub(1) as f32) * 12.0))
-                        .py(px(6.0))
-                        .hover(|s| s.bg(crate::shell::rgb_hex("#3a3a3a")))
-                        .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
-                            if let Some(handle) = &handle {
-                                let _ = handle.update(cx, |this, cx| {
-                                    this.workspace.update(cx, |workspace, cx| {
-                                        workspace.update_active_document(cx, |doc| {
-                                            doc.focus_block(block_index);
-                                        });
+
+        div().flex_1().child(gpui::list(
+            gpui::ListState::new(headings.len(), gpui::ListAlignment::Top, px(100.0)),
+            move |idx, _window, _cx| {
+                let (block_index, level, title) = &headings[idx];
+                let block_index = *block_index;
+                let level = *level;
+                let title = title.clone();
+
+                let handle = this_handle.clone();
+
+                div()
+                    .px(px(16.0))
+                    .pl(px(16.0 + (level.saturating_sub(1) as f32) * 12.0))
+                    .py(px(6.0))
+                    .hover(|s| s.bg(crate::shell::rgb_hex("#3a3a3a")))
+                    .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                        if let Some(handle) = &handle {
+                            let _ = handle.update(cx, |this, cx| {
+                                this.workspace.update(cx, |workspace, cx| {
+                                    workspace.update_active_document(cx, |doc| {
+                                        doc.focus_block(block_index);
                                     });
                                 });
-                            }
-                        })
-                        .child(
-                            div()
-                                .text_size(px(13.0))
-                                .text_color(crate::shell::rgb_hex(if level == 1 { &theme.palette.text_primary } else { &theme.palette.text_muted }))
-                                .child(title)
-                        )
-                        .into_any_element()
-                }
-            )
-        )
+                            });
+                        }
+                    })
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .text_color(crate::shell::rgb_hex(if level == 1 {
+                                &theme.palette.text_primary
+                            } else {
+                                &theme.palette.text_muted
+                            }))
+                            .child(title),
+                    )
+                    .into_any_element()
+            },
+        ))
     }
 }
 
@@ -443,86 +533,80 @@ impl Render for ProjectPanel {
             .border_color(crate::shell::rgb_hex(&theme.palette.panel_border))
             .flex()
             .flex_col()
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
-                this.hide_context_menu(cx);
-            }))
-            .child(self.render_mode_toggle(cx))
-            .child(
-                div()
-                    .flex_1()
-                    .child(
-                        match self.mode {
-                            SidebarMode::Files => {
-                                if let Some(this_handle) = this_handle {
-                                    div().flex_1().child(
-                                        gpui::list(
-                                            gpui::ListState::new(
-                                                entries.len(),
-                                                gpui::ListAlignment::Top,
-                                                px(100.0),
-                                            ),
-                                            move |idx, _window, _cx| {
-                                                let (depth, entry) = &entries[idx];
-                                                let is_expanded = expanded_dirs.contains(&entry.path);
-                                                let is_dir = entry.is_dir;
-                                                let name = entry.name.clone();
-                                                let path = entry.path.clone();
-                                                
-                                                let left_click_path = path.clone();
-                                                let right_click_path = path.clone();
-                                                let left_handle = this_handle.clone();
-                                                let right_handle = this_handle.clone();
-
-                                                div()
-                                                    .px(px(16.0))
-                                                    .pl(px(16.0 + (*depth as f32) * 12.0))
-                                                    .py(px(4.0))
-                                                    .hover(|s| s.bg(crate::shell::rgb_hex("#3a3a3a")))
-                                                    .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
-                                                        let path = left_click_path.clone();
-                                                        let _ = left_handle.update(cx, |this, cx| {
-                                                            if is_dir {
-                                                                this.toggle_directory(path, cx);
-                                                            } else {
-                                                                this.open_file(path, cx);
-                                                            }
-                                                        });
-                                                    })
-                                                    .on_mouse_down(MouseButton::Right, move |event: &gpui::MouseDownEvent, _window, cx| {
-                                                        let path = right_click_path.clone();
-                                                        let pos = event.position;
-                                                        let _ = right_handle.update(cx, |this, cx| {
-                                                            this.show_context_menu(path, pos, cx);
-                                                        });
-                                                    })
-                                                    .child(
-                                                        div()
-                                                            .flex()
-                                                            .gap(px(6.0))
-                                                            .items_center()
-                                                            .child(
-                                                                div()
-                                                                    .text_size(px(12.0))
-                                                                    .child(if is_dir { if is_expanded { "▼" } else { "▶" } } else { "📄" })
-                                                            )
-                                                            .child(
-                                                                div()
-                                                                    .text_size(px(13.0))
-                                                                    .child(name)
-                                                            )
-                                                    )
-                                                    .into_any_element()
-                                            }
-                                        )
-                                    )
-                                } else {
-                                    div()
-                                }
-                            }
-                            SidebarMode::Outline => self.render_outline(cx),
-                        }
-                    )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _event, _window, cx| {
+                    this.hide_context_menu(cx);
+                }),
             )
+            .child(self.render_mode_toggle(cx))
+            .child(div().flex_1().child(match self.mode {
+                SidebarMode::Files => {
+                    if let Some(this_handle) = this_handle {
+                        div().flex_1().child(gpui::list(
+                            gpui::ListState::new(
+                                entries.len(),
+                                gpui::ListAlignment::Top,
+                                px(100.0),
+                            ),
+                            move |idx, _window, _cx| {
+                                let (depth, entry) = &entries[idx];
+                                let is_expanded = expanded_dirs.contains(&entry.path);
+                                let is_dir = entry.is_dir;
+                                let name = entry.name.clone();
+                                let path = entry.path.clone();
+
+                                let left_click_path = path.clone();
+                                let right_click_path = path.clone();
+                                let left_handle = this_handle.clone();
+                                let right_handle = this_handle.clone();
+
+                                div()
+                                    .px(px(16.0))
+                                    .pl(px(16.0 + (*depth as f32) * 12.0))
+                                    .py(px(4.0))
+                                    .hover(|s| s.bg(crate::shell::rgb_hex("#3a3a3a")))
+                                    .on_mouse_down(MouseButton::Left, move |_event, _window, cx| {
+                                        let path = left_click_path.clone();
+                                        let _ = left_handle.update(cx, |this, cx| {
+                                            if is_dir {
+                                                this.toggle_directory(path, cx);
+                                            } else {
+                                                this.open_file(path, cx);
+                                            }
+                                        });
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        move |event: &gpui::MouseDownEvent, _window, cx| {
+                                            let path = right_click_path.clone();
+                                            let pos = event.position;
+                                            let _ = right_handle.update(cx, |this, cx| {
+                                                this.show_context_menu(path, pos, cx);
+                                            });
+                                        },
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .gap(px(6.0))
+                                            .items_center()
+                                            .child(div().text_size(px(12.0)).child(if is_dir {
+                                                if is_expanded { "▼" } else { "▶" }
+                                            } else {
+                                                "📄"
+                                            }))
+                                            .child(div().text_size(px(13.0)).child(name)),
+                                    )
+                                    .into_any_element()
+                            },
+                        ))
+                    } else {
+                        div()
+                    }
+                }
+                SidebarMode::Outline => self.render_outline(cx),
+            }))
             .when_some(self.context_menu.as_ref(), |this, menu| {
                 this.child(self.render_context_menu(menu, cx))
             })

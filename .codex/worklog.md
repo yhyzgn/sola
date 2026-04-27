@@ -555,11 +555,15 @@
     - **架构解耦与防风暴优化**：重构了 `render_block` 的签名，彻底移除了 `focus_block` 副作用调用。同时优化了渲染通知频率，合并了 Typst 缓存回填时的重复刷新，确保滚动体验极致丝滑。
     - **并发模型对齐**：采用了最新的 `weak_entity().update` 安全模式，完美解决了 GPUI 0.2.2 虚拟化回调中的生命周期逃逸问题。
     - 验证通过：打开万行级文档不再有任何感知延迟，滚动流畅度与顶级原生编辑器对齐。Phase 5 性能目标圆满闭环。
-20. **主界面深度瘦身与偏好设置面板 (Preferences Modal)**：
-    - **UI 彻底纯净化**：大刀阔斧地移除了 `render_document_surface` 中所有与文本编辑无关的按钮、标题和快捷键图例。主编辑区现在由 `gpui::list` 完全独占，实现了类似 Typora 的“沉浸式极简”美学。
-    - **落地 Preferences 面板**：新增了 `show_preferences` 状态及相应的模态对话框。通过透明遮罩与居中弹窗，优雅地收拢了主题切换（Color Theme）与全局快捷键速查（Keyboard Shortcuts）功能。
-    - **逻辑闭环**：通过 `Ctrl+,` 快捷键或 `File -> Preferences` 菜单项，可以平滑地唤出/关闭设置中心，并确保与底层的 Action 系统完美对接。
-    - 验证通过：UI 界面回归白纸般的纯净感，模态框交互自然，所有废弃常量和死代码已清理完毕，`cargo check` 零警告。
+20. 主界面深度瘦身与偏好设置面板 (Preferences Modal)：
+...
+21. 落地配置持久化 (Configuration Persistence)：
+    - 引入 `dirs` 依赖，自动识别跨平台配置目录（Linux: `~/.config/sola/`）。
+    - 实现 `AppConfig` 模型，支持对 `ThemeMode` 和 `recent_paths` 的序列化存储（TOML 格式）。
+    - 打通 `Workspace` 初始化与持久化链路：启动时自动加载配置，变更时（切换主题、打开文件）自动同步磁盘。
+    - 补齐了 `ThemeMode` 的 `serde` 支持。
+    - 验证通过：`cargo check` 正常，配置读写逻辑单元测试覆盖。
+
 12. **修复菜单显示与快捷键响应问题**：
     - **初始获焦机制**：在窗口创建后显式调用 `window.focus()`，确保 `SolaRoot` 能够第一时间捕获并分发 Action。
     - **落地内置操作栏**：在页面 Header 中直接引入 “Open...” 和 “Save” 按钮。解决了 Linux 环境下原生全局菜单难以发现的问题，提供了双重操作入口。

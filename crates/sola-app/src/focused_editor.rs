@@ -1,10 +1,11 @@
 use gpui::{
     App, Bounds, DispatchPhase, Element, ElementId, Font, FontFeatures, FontStyle, FontWeight,
     GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, Pixels, Point, SharedString, Style, TextAlign, TextRun, Window, WrappedLine, px,
+    MouseMoveEvent, Pixels, Point, SharedString, Style, TextAlign, TextRun, Window, WrappedLine,
+    px,
 };
-use sola_document::highlighter::{HighlightKind, HighlightedSpan};
 use sola_document::CursorState;
+use sola_document::highlighter::{HighlightKind, HighlightedSpan};
 use sola_theme::{Theme, parse_hex_color};
 use std::sync::Arc;
 
@@ -361,7 +362,13 @@ impl Element for FocusedEditorElement {
         let layout_id = window.request_layout(style, None, cx);
 
         let visual_lines = collect_visual_lines(&lines);
-        (layout_id, FocusedEditorState { lines, visual_lines })
+        (
+            layout_id,
+            FocusedEditorState {
+                lines,
+                visual_lines,
+            },
+        )
     }
 
     fn prepaint(
@@ -385,11 +392,10 @@ impl Element for FocusedEditorElement {
         _prepaint_state: &mut Self::PrepaintState,
         window: &mut Window,
         cx: &mut App,
-        ) {
-            let lines = &request_layout_state.lines;
-            let visual_lines = &request_layout_state.visual_lines;
-            let line_height = self.style.line_height;
-
+    ) {
+        let lines = &request_layout_state.lines;
+        let visual_lines = &request_layout_state.visual_lines;
+        let line_height = self.style.line_height;
 
         let padding = Point {
             x: self.style.padding_x,
@@ -441,7 +447,11 @@ impl Element for FocusedEditorElement {
         let mut y_offset = Pixels::ZERO;
         for line in lines.iter() {
             line.paint(
-                text_bounds.origin + Point { x: Pixels::ZERO, y: y_offset },
+                text_bounds.origin
+                    + Point {
+                        x: Pixels::ZERO,
+                        y: y_offset,
+                    },
                 line_height,
                 TextAlign::Left,
                 None,
@@ -506,7 +516,8 @@ impl Element for FocusedEditorElement {
             let visual_lines_drag = visual_lines.clone();
             window.on_mouse_event(
                 move |event: &MouseMoveEvent, phase: DispatchPhase, window, cx| {
-                    if phase == DispatchPhase::Bubble && event.pressed_button == Some(MouseButton::Left)
+                    if phase == DispatchPhase::Bubble
+                        && event.pressed_button == Some(MouseButton::Left)
                     {
                         let local_point = event.position - text_bounds.origin;
                         if let Some(offset) =

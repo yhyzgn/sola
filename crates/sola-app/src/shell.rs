@@ -14,8 +14,8 @@ use gpui::prelude::{FluentBuilder, StatefulInteractiveElement, Styled};
 use gpui::{
     AppContext, Application, AsyncApp, Bounds, Context, Div, Entity, FocusHandle, FontWeight, Hsla,
     Image, ImageFormat, InteractiveElement, IntoElement, KeyBinding, Menu, MenuItem, MouseButton,
-    ParentElement, Render, WeakEntity, Window,
-    WindowBounds, WindowOptions, div, img, px, rgb, size,
+    ParentElement, Render, WeakEntity, Window, WindowBounds, WindowOptions, div, img, px, rgb,
+    size,
 };
 
 use sola_core::sample_markdown;
@@ -85,11 +85,7 @@ impl SolaRoot {
         })
         .detach();
 
-        let document_list_state = gpui::ListState::new(
-            0,
-            gpui::ListAlignment::Top,
-            px(1000.0),
-        );
+        let document_list_state = gpui::ListState::new(0, gpui::ListAlignment::Top, px(1000.0));
 
         let mut this = Self {
             focus_handle: cx.focus_handle(),
@@ -113,35 +109,48 @@ impl SolaRoot {
 
     fn open_project(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         use gpui::PathPromptOptions;
-        self.open_project_with_options(PathPromptOptions {
-            files: true,
-            directories: true,
-            multiple: false,
-            prompt: Some("Open File or Folder".into()),
-        }, cx);
+        self.open_project_with_options(
+            PathPromptOptions {
+                files: true,
+                directories: true,
+                multiple: false,
+                prompt: Some("Open File or Folder".into()),
+            },
+            cx,
+        );
     }
 
     fn open_file_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         use gpui::PathPromptOptions;
-        self.open_project_with_options(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some("Open File".into()),
-        }, cx);
+        self.open_project_with_options(
+            PathPromptOptions {
+                files: true,
+                directories: false,
+                multiple: false,
+                prompt: Some("Open File".into()),
+            },
+            cx,
+        );
     }
 
     fn open_folder_dialog(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         use gpui::PathPromptOptions;
-        self.open_project_with_options(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Open Folder".into()),
-        }, cx);
+        self.open_project_with_options(
+            PathPromptOptions {
+                files: false,
+                directories: true,
+                multiple: false,
+                prompt: Some("Open Folder".into()),
+            },
+            cx,
+        );
     }
 
-    fn open_project_with_options(&mut self, options: gpui::PathPromptOptions, cx: &mut Context<Self>) {
+    fn open_project_with_options(
+        &mut self,
+        options: gpui::PathPromptOptions,
+        cx: &mut Context<Self>,
+    ) {
         let this_handle = self.this_handle.clone();
         let paths_rx = cx.prompt_for_paths(options);
 
@@ -172,7 +181,13 @@ impl SolaRoot {
         };
 
         // 1. Smart Worktree Update
-        let current_worktree_path = self.workspace.read(cx).worktree().read(cx).abs_path().to_path_buf();
+        let current_worktree_path = self
+            .workspace
+            .read(cx)
+            .worktree()
+            .read(cx)
+            .abs_path()
+            .to_path_buf();
         if target_dir != current_worktree_path {
             let worktree = Worktree::local(target_dir, cx);
             self.workspace.update(cx, |workspace, cx| {
@@ -190,10 +205,10 @@ impl SolaRoot {
                 let background = cx.background_executor().clone();
                 async move {
                     if let Ok(content) = std::fs::read_to_string(&path) {
-                        let document = background.spawn(async move {
-                            DocumentModel::from_markdown(content)
-                        }).await;
-                        
+                        let document = background
+                            .spawn(async move { DocumentModel::from_markdown(content) })
+                            .await;
+
                         let _ = cx.update(|cx| {
                             workspace.update(cx, |workspace, cx| {
                                 workspace.open_file(path, document, cx);
@@ -201,16 +216,22 @@ impl SolaRoot {
                         });
                     }
                 }
-            }).detach();
+            })
+            .detach();
         }
-        
+
         cx.notify();
     }
 
     fn save_as_project(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         let this_handle = self.this_handle.clone();
 
-        let base_path = self.workspace.read(cx).current_path().cloned().unwrap_or_else(|| PathBuf::from("."));
+        let base_path = self
+            .workspace
+            .read(cx)
+            .current_path()
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from("."));
         let path_rx = cx.prompt_for_new_path(&base_path, Some("untitled.md"));
 
         cx.spawn(|_this, cx: &mut gpui::AsyncApp| {
@@ -230,34 +251,44 @@ impl SolaRoot {
         .detach();
     }
 
-    fn export_document_as(&mut self, format: sola_export::ExportFormat, _window: &mut Window, cx: &mut Context<Self>) {
+    fn export_document_as(
+        &mut self,
+        format: sola_export::ExportFormat,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let workspace = self.workspace.read(cx);
         let Some(document) = workspace.active_document_ref() else {
             return; // No document to export
         };
         let theme = workspace.theme().clone();
-        
-        let base_path = workspace.current_path().cloned().unwrap_or_else(|| PathBuf::from("."));
-        
+
+        let base_path = workspace
+            .current_path()
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from("."));
+
         let default_name = match format {
             sola_export::ExportFormat::Markdown => "untitled.md",
             sola_export::ExportFormat::Html => "untitled.html",
         };
-        
+
         let path_rx = cx.prompt_for_new_path(&base_path, Some(default_name));
 
         // Need to clone document data before spawning because we can't move DocumentModel reference easily across threads safely without locking.
         // But DocumentModel is Clone.
         let document = document.clone();
-        
+
         cx.spawn(move |_this, cx: &mut gpui::AsyncApp| {
             let background = cx.background_executor().clone();
             async move {
                 if let Ok(Ok(Some(path))) = path_rx.await {
-                    let artifact = background.spawn(async move {
-                        sola_export::export_document(&document, &theme, format)
-                    }).await;
-                    
+                    let artifact = background
+                        .spawn(
+                            async move { sola_export::export_document(&document, &theme, format) },
+                        )
+                        .await;
+
                     let _ = std::fs::write(&path, artifact.bytes);
                 }
             }
@@ -374,10 +405,7 @@ impl SolaRoot {
                 ("Focus Mode", "F8", true),
                 ("Typewriter Mode", "F9", true),
             ],
-            "Themes" => vec![
-                ("Sola Dark", "", true),
-                ("Sola Light", "", true),
-            ],
+            "Themes" => vec![("Sola Dark", "", true), ("Sola Light", "", true)],
             _ => vec![],
         };
 
@@ -415,7 +443,9 @@ impl SolaRoot {
                     }
 
                     if label == "Open Recent" || label == "Import" || label == "Export" {
-                         return self.render_cascading_menu_item(label, cx).into_any_element();
+                        return self
+                            .render_cascading_menu_item(label, cx)
+                            .into_any_element();
                     }
 
                     self.render_overlay_item(label, shortcut, enabled, cx)
@@ -427,7 +457,7 @@ impl SolaRoot {
     fn render_cascading_menu_item(&self, label: &'static str, cx: &mut Context<Self>) -> Div {
         let theme = self.workspace.read(cx).theme().clone();
         let is_active = self.active_submenu == Some(label);
-        
+
         div()
             .relative()
             .px(px(12.0))
@@ -465,7 +495,8 @@ impl SolaRoot {
         let workspace = self.workspace.read(cx);
         let theme = workspace.theme();
 
-        type MenuAction = Box<dyn Fn(&mut SolaRoot, &mut Window, &mut Context<SolaRoot>) + Send + Sync>;
+        type MenuAction =
+            Box<dyn Fn(&mut SolaRoot, &mut Window, &mut Context<SolaRoot>) + Send + Sync>;
 
         let items: Vec<(String, MenuAction)> = match label {
             "Open Recent" => {
@@ -478,36 +509,68 @@ impl SolaRoot {
                         .unwrap_or_else(|| path.to_string_lossy().to_string());
                     results.push((
                         name,
-                        Box::new(move |this: &mut SolaRoot, _window: &mut Window, cx: &mut Context<SolaRoot>| {
-                            this.open_path(path.clone(), cx);
-                        }) as MenuAction,
+                        Box::new(
+                            move |this: &mut SolaRoot,
+                                  _window: &mut Window,
+                                  cx: &mut Context<SolaRoot>| {
+                                this.open_path(path.clone(), cx);
+                            },
+                        ) as MenuAction,
                     ));
                 }
 
-                results.push(("Separator".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Window, _: &mut Context<SolaRoot>| {}) as MenuAction));
+                results.push((
+                    "Separator".to_string(),
+                    Box::new(|_: &mut SolaRoot, _: &mut Window, _: &mut Context<SolaRoot>| {})
+                        as MenuAction,
+                ));
                 results.push((
                     "Clear Items".to_string(),
-                    Box::new(|this: &mut SolaRoot, _window: &mut Window, cx: &mut Context<SolaRoot>| {
-                        this.workspace.update(cx, |w, cx| w.clear_recent_paths(cx));
-                    }) as MenuAction,
+                    Box::new(
+                        |this: &mut SolaRoot, _window: &mut Window, cx: &mut Context<SolaRoot>| {
+                            this.workspace.update(cx, |w, cx| w.clear_recent_paths(cx));
+                        },
+                    ) as MenuAction,
                 ));
                 results
             }
             "Import" => vec![
-                ("Markdown...".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Window, _: &mut Context<SolaRoot>| {}) as MenuAction),
-                ("HTML...".to_string(), Box::new(|_: &mut SolaRoot, _: &mut Window, _: &mut Context<SolaRoot>| {}) as MenuAction),
+                (
+                    "Markdown...".to_string(),
+                    Box::new(|_: &mut SolaRoot, _: &mut Window, _: &mut Context<SolaRoot>| {})
+                        as MenuAction,
+                ),
+                (
+                    "HTML...".to_string(),
+                    Box::new(|_: &mut SolaRoot, _: &mut Window, _: &mut Context<SolaRoot>| {})
+                        as MenuAction,
+                ),
             ],
             "Export" => vec![
-                ("Markdown...".to_string(), Box::new(|this: &mut SolaRoot, window: &mut Window, cx: &mut Context<SolaRoot>| {
-                    this.export_document_as(sola_export::ExportFormat::Markdown, window, cx);
-                }) as MenuAction),
-                ("HTML...".to_string(), Box::new(|this: &mut SolaRoot, window: &mut Window, cx: &mut Context<SolaRoot>| {
-                    this.export_document_as(sola_export::ExportFormat::Html, window, cx);
-                }) as MenuAction),
+                (
+                    "Markdown...".to_string(),
+                    Box::new(
+                        |this: &mut SolaRoot, window: &mut Window, cx: &mut Context<SolaRoot>| {
+                            this.export_document_as(
+                                sola_export::ExportFormat::Markdown,
+                                window,
+                                cx,
+                            );
+                        },
+                    ) as MenuAction,
+                ),
+                (
+                    "HTML...".to_string(),
+                    Box::new(
+                        |this: &mut SolaRoot, window: &mut Window, cx: &mut Context<SolaRoot>| {
+                            this.export_document_as(sola_export::ExportFormat::Html, window, cx);
+                        },
+                    ) as MenuAction,
+                ),
             ],
             _ => vec![],
         };
-        
+
         div()
             .absolute()
             .top(px(-4.0))
@@ -522,26 +585,34 @@ impl SolaRoot {
             .flex_col()
             .children(items.into_iter().map(|(label, action)| {
                 if label == "Separator" {
-                    return div().h(px(1.0)).bg(rgb_hex(&theme.palette.panel_border)).my(px(4.0)).into_any_element();
+                    return div()
+                        .h(px(1.0))
+                        .bg(rgb_hex(&theme.palette.panel_border))
+                        .my(px(4.0))
+                        .into_any_element();
                 }
-                
+
                 div()
                     .px(px(12.0))
                     .py(px(6.0))
                     .rounded(px(4.0))
                     .hover(|s| s.bg(rgb_hex("#3a3a3a")))
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
-                        action(this, window, cx);
-                        this.active_menu = None;
-                        this.active_submenu = None;
-                        cx.notify();
-                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            action(this, window, cx);
+                            this.active_menu = None;
+                            this.active_submenu = None;
+                            cx.notify();
+                        }),
+                    )
                     .child(
                         div()
                             .text_size(px(12.0))
                             .text_color(rgb_hex(&theme.palette.text_primary))
-                            .child(label)
-                    ).into_any_element()
+                            .child(label),
+                    )
+                    .into_any_element()
             }))
     }
 
@@ -572,7 +643,9 @@ impl SolaRoot {
                     this.active_submenu = None;
                     // Dispatch logic
                     match label {
-                        "New" => this.workspace.update(cx, |w, cx| w.open_template(DocumentModel::from_markdown(""), cx)),
+                        "New" => this.workspace.update(cx, |w, cx| {
+                            w.open_template(DocumentModel::from_markdown(""), cx)
+                        }),
                         "Open File..." => this.open_file_dialog(window, cx),
                         "Open Folder..." => this.open_folder_dialog(window, cx),
                         "Save" => this.workspace.update(cx, |w, cx| w.save_current_file(cx)),
@@ -614,14 +687,14 @@ impl SolaRoot {
                                     w.toggle_theme(cx);
                                 }
                             });
-                        },
+                        }
                         "Sola Light" => {
                             this.workspace.update(cx, |w, cx| {
                                 if w.theme_mode() != crate::workspace::ThemeMode::Light {
                                     w.toggle_theme(cx);
                                 }
                             });
-                        },
+                        }
                         _ => {}
                     }
                     cx.notify();
@@ -727,10 +800,13 @@ impl SolaRoot {
                 .flex()
                 .items_center()
                 .justify_center()
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                    this.show_preferences = false;
-                    cx.notify();
-                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, cx| {
+                        this.show_preferences = false;
+                        cx.notify();
+                    }),
+                )
                 .child(
                     div()
                         .w(px(600.0))
@@ -761,11 +837,16 @@ impl SolaRoot {
                                         .text_size(px(14.0))
                                         .text_color(rgb_hex(&theme.palette.text_muted))
                                         .cursor_pointer()
-                                        .hover(|s| s.text_color(rgb_hex(&theme.palette.text_primary)))
-                                        .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                            this.show_preferences = false;
-                                            cx.notify();
-                                        }))
+                                        .hover(|s| {
+                                            s.text_color(rgb_hex(&theme.palette.text_primary))
+                                        })
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.show_preferences = false;
+                                                cx.notify();
+                                            }),
+                                        )
                                         .child("✕"),
                                 ),
                         )
@@ -788,13 +869,19 @@ impl SolaRoot {
                                         )
                                         .child(
                                             action_button(
-                                                format!("Toggle (Currently {})", self.workspace.read(cx).theme_mode().label()),
+                                                format!(
+                                                    "Toggle (Currently {})",
+                                                    self.workspace.read(cx).theme_mode().label()
+                                                ),
                                                 &theme,
                                                 true,
                                             )
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                                this.toggle_theme(cx);
-                                            })),
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.toggle_theme(cx);
+                                                }),
+                                            ),
                                         ),
                                 ),
                         )
@@ -805,8 +892,8 @@ impl SolaRoot {
                                 .gap(px(12.0))
                                 .child(section_title("KEYBOARD SHORTCUTS", &theme))
                                 .child(shortcut_legend(&theme)),
-                        )
-                )
+                        ),
+                ),
         )
     }
 
@@ -824,7 +911,9 @@ impl SolaRoot {
             .border_color(rgb_hex(&theme.palette.panel_border))
             .children(docs.iter().enumerate().map(|(idx, doc)| {
                 let is_active = Some(idx) == active_idx;
-                let filename = doc.path.as_ref()
+                let filename = doc
+                    .path
+                    .as_ref()
                     .and_then(|p| p.file_name())
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "Untitled".to_string());
@@ -932,21 +1021,37 @@ impl SolaRoot {
                             .py(px(32.0))
                             .max_w(px(900.0))
                             .mx_auto()
-                            .child(gpui::list(self.document_list_state.clone(), move |idx, _window, cx| {
-                                let weak_handle = weak_handle.clone();
-                                weak_handle.update(cx, |this, cx| {
-                                    let workspace = this.workspace.read(cx);
-                                    let theme = workspace.theme();
-                                    let Some(doc) = workspace.active_document_ref() else {
-                                        return div().into_any_element();
-                                    };
-                                    let Some(block) = doc.blocks().get(idx) else {
-                                        return div().into_any_element();
-                                    };
-                                    
-                                    this.render_block(idx, block, doc, theme, weak_handle.clone()).into_any_element()
-                                }).unwrap_or_else(|_| div().into_any_element())
-                            }).size_full())
+                            .child(
+                                gpui::list(
+                                    self.document_list_state.clone(),
+                                    move |idx, _window, cx| {
+                                        let weak_handle = weak_handle.clone();
+                                        weak_handle
+                                            .update(cx, |this, cx| {
+                                                let workspace = this.workspace.read(cx);
+                                                let theme = workspace.theme();
+                                                let Some(doc) = workspace.active_document_ref()
+                                                else {
+                                                    return div().into_any_element();
+                                                };
+                                                let Some(block) = doc.blocks().get(idx) else {
+                                                    return div().into_any_element();
+                                                };
+
+                                                this.render_block(
+                                                    idx,
+                                                    block,
+                                                    doc,
+                                                    theme,
+                                                    weak_handle.clone(),
+                                                )
+                                                .into_any_element()
+                                            })
+                                            .unwrap_or_else(|_| div().into_any_element())
+                                    },
+                                )
+                                .size_full(),
+                            ),
                     ),
             )
     }
@@ -1005,17 +1110,19 @@ impl SolaRoot {
                             selection_color,
                             cursor_color,
                         )
-                        .on_cursor_move(move |offset, shift, window, cx| {
-                            let _ = on_cursor_handle.update(cx, |this, cx| {
-                                this.workspace.update(cx, |workspace, cx| {
-                                    window.focus(&focus_handle);
-                                    this.cursor_visible = true;
-                                    workspace.update_active_document(cx, |doc| {
-                                        doc.set_focused_cursor(offset, shift);
+                        .on_cursor_move(
+                            move |offset, shift, window, cx| {
+                                let _ = on_cursor_handle.update(cx, |this, cx| {
+                                    this.workspace.update(cx, |workspace, cx| {
+                                        window.focus(&focus_handle);
+                                        this.cursor_visible = true;
+                                        workspace.update_active_document(cx, |doc| {
+                                            doc.set_focused_cursor(offset, shift);
+                                        });
                                     });
                                 });
-                            });
-                        }),
+                            },
+                        ),
                     ),
             )
         } else {
@@ -1030,34 +1137,27 @@ impl SolaRoot {
         let focus_handle = self.focus_handle.clone();
 
         block_container
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                move |_, window, cx| {
-                    let _ = click_handle.update(cx, |this, cx| {
-                        this.workspace.update(cx, |workspace, cx| {
-                            workspace.update_active_document(cx, |doc| {
-                                let plan = plan_block_click(
-                                    focused_block_idx,
-                                    index,
-                                    has_draft,
-                                );
+            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                let _ = click_handle.update(cx, |this, cx| {
+                    this.workspace.update(cx, |workspace, cx| {
+                        workspace.update_active_document(cx, |doc| {
+                            let plan = plan_block_click(focused_block_idx, index, has_draft);
 
-                                if plan.apply_draft {
-                                    doc.apply_focused_draft();
-                                }
+                            if plan.apply_draft {
+                                doc.apply_focused_draft();
+                            }
 
-                                if plan.switch_block_focus {
-                                    doc.focus_block(index);
-                                }
+                            if plan.switch_block_focus {
+                                doc.focus_block(index);
+                            }
 
-                                if plan.refresh_window_focus {
-                                    window.focus(&focus_handle);
-                                }
-                            });
+                            if plan.refresh_window_focus {
+                                window.focus(&focus_handle);
+                            }
                         });
                     });
-                },
-            )
+                });
+            })
             .child(indicator)
             .child(content)
             .into_any_element()
@@ -1120,7 +1220,12 @@ impl SolaRoot {
             BlockKind::Quote => div()
                 .flex()
                 .gap(px(12.0))
-                .child(div().w(px(4.0)).bg(rgb_hex(&theme.palette.accent)).rounded_full())
+                .child(
+                    div()
+                        .w(px(4.0))
+                        .bg(rgb_hex(&theme.palette.accent))
+                        .rounded_full(),
+                )
                 .child(if block.typst.is_some() {
                     self.render_typst_preview(block, "Quote", theme)
                 } else {
@@ -1257,7 +1362,13 @@ impl SolaRoot {
         }
     }
 
-    fn render_textual_block(&self, block: &DocumentBlock, default_size: f32, color: &str, theme: &Theme) -> Div {
+    fn render_textual_block(
+        &self,
+        block: &DocumentBlock,
+        default_size: f32,
+        color: &str,
+        theme: &Theme,
+    ) -> Div {
         match &block.html {
             Some(HtmlAdapter::Adapted { nodes }) => {
                 self.render_html_nodes(nodes, default_size, color, theme)
@@ -1439,7 +1550,9 @@ impl SolaRoot {
 
         let mut processed_cache_keys = HashSet::new();
         for (index, block_source, kind, source, cache_key) in requests {
-            if self.typst_cache.contains_key(&cache_key) && !processed_cache_keys.contains(&cache_key) {
+            if self.typst_cache.contains_key(&cache_key)
+                && !processed_cache_keys.contains(&cache_key)
+            {
                 if let Some(cached) = self.typst_cache.get(&cache_key).cloned() {
                     self.workspace.update(cx, |workspace, cx| {
                         workspace.update_active_document(cx, |document| {
@@ -1514,100 +1627,138 @@ impl SolaRoot {
             let theme = workspace.theme().clone();
 
             if primary && modifiers.shift && key.eq_ignore_ascii_case("z") {
-                return workspace.update_active_document(cx, |doc| doc.redo()).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| doc.redo())
+                    .unwrap_or(false);
             }
 
             if primary && key.eq_ignore_ascii_case("y") {
-                return workspace.update_active_document(cx, |doc| doc.redo()).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| doc.redo())
+                    .unwrap_or(false);
             }
 
             if primary && key.eq_ignore_ascii_case("z") {
-                return workspace.update_active_document(cx, |doc| doc.undo()).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| doc.undo())
+                    .unwrap_or(false);
             }
 
             if modifiers.alt && key.eq_ignore_ascii_case("up") {
-                return workspace.update_active_document(cx, |doc| {
-                    if doc.focused_has_draft() {
-                        doc.apply_focused_draft();
-                    }
-                    doc.focus_previous()
-                }).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| {
+                        if doc.focused_has_draft() {
+                            doc.apply_focused_draft();
+                        }
+                        doc.focus_previous()
+                    })
+                    .unwrap_or(false);
             }
 
             if modifiers.alt && key.eq_ignore_ascii_case("down") {
-                return workspace.update_active_document(cx, |doc| {
-                    if doc.focused_has_draft() {
-                        doc.apply_focused_draft();
-                    }
-                    doc.focus_next()
-                }).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| {
+                        if doc.focused_has_draft() {
+                            doc.apply_focused_draft();
+                        }
+                        doc.focus_next()
+                    })
+                    .unwrap_or(false);
             }
 
             if key.eq_ignore_ascii_case("left") {
-                return workspace.update_active_document(cx, |doc| doc.move_cursor_left(modifiers.shift)).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| doc.move_cursor_left(modifiers.shift))
+                    .unwrap_or(false);
             }
 
             if key.eq_ignore_ascii_case("right") {
-                return workspace.update_active_document(cx, |doc| doc.move_cursor_right(modifiers.shift)).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| doc.move_cursor_right(modifiers.shift))
+                    .unwrap_or(false);
             }
 
             if key.eq_ignore_ascii_case("up") {
-                return workspace.update_active_document(cx, |doc| {
-                    if let Some(target) = self.soft_wrapped_vertical_target(-1, doc, &theme, window) {
-                        return doc.set_focused_cursor(target, modifiers.shift);
-                    }
-                    doc.move_cursor_up(modifiers.shift)
-                }).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| {
+                        if let Some(target) =
+                            self.soft_wrapped_vertical_target(-1, doc, &theme, window)
+                        {
+                            return doc.set_focused_cursor(target, modifiers.shift);
+                        }
+                        doc.move_cursor_up(modifiers.shift)
+                    })
+                    .unwrap_or(false);
             }
 
             if key.eq_ignore_ascii_case("down") {
-                return workspace.update_active_document(cx, |doc| {
-                    if let Some(target) = self.soft_wrapped_vertical_target(1, doc, &theme, window) {
-                        return doc.set_focused_cursor(target, modifiers.shift);
-                    }
-                    doc.move_cursor_down(modifiers.shift)
-                }).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| {
+                        if let Some(target) =
+                            self.soft_wrapped_vertical_target(1, doc, &theme, window)
+                        {
+                            return doc.set_focused_cursor(target, modifiers.shift);
+                        }
+                        doc.move_cursor_down(modifiers.shift)
+                    })
+                    .unwrap_or(false);
             }
 
             if key.eq_ignore_ascii_case("home") {
-                return workspace.update_active_document(cx, |doc| {
-                    if let Some(target) = self.visual_line_edge_offset(doc, &theme, window, false) {
-                        return doc.set_focused_cursor(target, modifiers.shift);
-                    }
-                    false
-                }).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| {
+                        if let Some(target) =
+                            self.visual_line_edge_offset(doc, &theme, window, false)
+                        {
+                            return doc.set_focused_cursor(target, modifiers.shift);
+                        }
+                        false
+                    })
+                    .unwrap_or(false);
             }
 
             if key.eq_ignore_ascii_case("end") {
-                return workspace.update_active_document(cx, |doc| {
-                    if let Some(target) = self.visual_line_edge_offset(doc, &theme, window, true) {
-                        return doc.set_focused_cursor(target, modifiers.shift);
-                    }
-                    false
-                }).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| {
+                        if let Some(target) =
+                            self.visual_line_edge_offset(doc, &theme, window, true)
+                        {
+                            return doc.set_focused_cursor(target, modifiers.shift);
+                        }
+                        false
+                    })
+                    .unwrap_or(false);
             }
 
             if primary && key.eq_ignore_ascii_case("a") {
-                return workspace.update_active_document(cx, |doc| {
-                    doc.select_all();
-                    true
-                }).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| {
+                        doc.select_all();
+                        true
+                    })
+                    .unwrap_or(false);
             }
 
             if primary && key.eq_ignore_ascii_case("n") {
-                return workspace.update_active_document(cx, |doc| {
-                    doc.insert_paragraph_after_focused(
-                        "Inserted via keyboard shortcut as a structure-editing prototype.",
-                    )
-                }).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| {
+                        doc.insert_paragraph_after_focused(
+                            "Inserted via keyboard shortcut as a structure-editing prototype.",
+                        )
+                    })
+                    .unwrap_or(false);
             }
 
             if primary && key.eq_ignore_ascii_case("d") {
-                return workspace.update_active_document(cx, |doc| doc.duplicate_focused_block()).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| doc.duplicate_focused_block())
+                    .unwrap_or(false);
             }
 
             if primary && key.eq_ignore_ascii_case("backspace") {
-                return workspace.update_active_document(cx, |doc| doc.delete_focused_block()).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| doc.delete_focused_block())
+                    .unwrap_or(false);
             }
 
             if primary && key.eq_ignore_ascii_case("s") {
@@ -1619,18 +1770,24 @@ impl SolaRoot {
             }
 
             if key.eq_ignore_ascii_case("escape") {
-                return workspace.update_active_document(cx, |doc| {
-                    doc.revert_focused_draft();
-                    true
-                }).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| {
+                        doc.revert_focused_draft();
+                        true
+                    })
+                    .unwrap_or(false);
             }
 
             if key.eq_ignore_ascii_case("backspace") {
-                return workspace.update_active_document(cx, |doc| doc.delete_at_cursor_in_focused_draft()).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| doc.delete_at_cursor_in_focused_draft())
+                    .unwrap_or(false);
             }
 
             if key.eq_ignore_ascii_case("enter") {
-                return workspace.update_active_document(cx, |doc| doc.push_char_to_focused_draft('\n')).unwrap_or(false);
+                return workspace
+                    .update_active_document(cx, |doc| doc.push_char_to_focused_draft('\n'))
+                    .unwrap_or(false);
             }
 
             if !modifiers.control && !modifiers.alt && !modifiers.platform {
@@ -1638,7 +1795,11 @@ impl SolaRoot {
                     let mut chars = ch.chars();
                     if let Some(single) = chars.next() {
                         if chars.next().is_none() {
-                            return workspace.update_active_document(cx, |doc| doc.push_char_to_focused_draft(single)).unwrap_or(false);
+                            return workspace
+                                .update_active_document(cx, |doc| {
+                                    doc.push_char_to_focused_draft(single)
+                                })
+                                .unwrap_or(false);
                         }
                     }
                 }
@@ -1755,28 +1916,23 @@ impl Render for SolaRoot {
             }))
             .child(self.render_menu_bar(cx))
             .child(
-                div()
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .min_h_0()
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_row()
-                            .min_h_0()
-                            .child(self.project_panel.clone())
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .flex()
-                                    .flex_col()
-                                    .min_w_0()
-                                    .child(self.render_tab_bar(cx))
-                                    .child(self.render_document_surface(cx)),
-                            ),
-                    ),
+                div().flex_1().flex().flex_col().min_h_0().child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .flex_row()
+                        .min_h_0()
+                        .child(self.project_panel.clone())
+                        .child(
+                            div()
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .min_w_0()
+                                .child(self.render_tab_bar(cx))
+                                .child(self.render_document_surface(cx)),
+                        ),
+                ),
             )
             .when_some(self.render_menu_mask(cx), |this, mask| this.child(mask))
             .when_some(self.render_menu_overlay(cx), |this, overlay| {

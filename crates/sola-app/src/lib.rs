@@ -1,8 +1,9 @@
-mod focused_editor;
-mod shell;
 pub mod actions;
+mod config;
+mod focused_editor;
 pub mod project_panel;
-pub mod worktree;
+mod shell;
 pub mod workspace;
+pub mod worktree;
 
 pub use shell::run;

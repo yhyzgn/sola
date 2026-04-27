@@ -1,10 +1,12 @@
-use gpui::{Context, Entity, EventEmitter};
+use crate::config::AppConfig;
 use crate::worktree::Worktree;
+use gpui::{Context, Entity, EventEmitter};
+use serde::{Deserialize, Serialize};
 use sola_document::DocumentModel;
 use sola_theme::Theme;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThemeMode {
     Dark,
     Light,
@@ -51,14 +53,28 @@ impl EventEmitter<WorkspaceEvent> for Workspace {}
 
 impl Workspace {
     pub fn new(worktree: Entity<Worktree>, _cx: &mut Context<Self>) -> Self {
+        let config = AppConfig::load();
+        let theme = match config.theme_mode {
+            ThemeMode::Dark => Theme::sola_dark(),
+            ThemeMode::Light => Theme::sola_light(),
+        };
+
         Self {
             worktree,
             documents: Vec::new(),
             active_document_index: None,
-            theme: Theme::sola_dark(),
-            theme_mode: ThemeMode::Dark,
-            recent_paths: Vec::new(),
+            theme,
+            theme_mode: config.theme_mode,
+            recent_paths: config.recent_paths,
         }
+    }
+
+    fn save_config(&self) {
+        let config = AppConfig {
+            theme_mode: self.theme_mode,
+            recent_paths: self.recent_paths.clone(),
+        };
+        let _ = config.save();
     }
 
     pub fn worktree(&self) -> &Entity<Worktree> {
@@ -112,6 +128,7 @@ impl Workspace {
             ThemeMode::Dark => Theme::sola_dark(),
             ThemeMode::Light => Theme::sola_light(),
         };
+        self.save_config();
         cx.emit(WorkspaceEvent::ThemeChanged);
         cx.notify();
     }
@@ -128,6 +145,7 @@ impl Workspace {
 
     pub fn clear_recent_paths(&mut self, cx: &mut Context<Self>) {
         self.recent_paths.clear();
+        self.save_config();
         cx.notify();
     }
 
@@ -139,12 +157,17 @@ impl Workspace {
         if self.recent_paths.len() > 10 {
             self.recent_paths.truncate(10);
         }
+        self.save_config();
     }
 
     pub fn open_file(&mut self, path: PathBuf, document: DocumentModel, cx: &mut Context<Self>) {
         self.add_recent_path(path.clone());
         // Check if already open
-        if let Some(idx) = self.documents.iter().position(|d| d.path.as_ref() == Some(&path)) {
+        if let Some(idx) = self
+            .documents
+            .iter()
+            .position(|d| d.path.as_ref() == Some(&path))
+        {
             self.active_document_index = Some(idx);
         } else {
             self.documents.push(OpenDocument {
