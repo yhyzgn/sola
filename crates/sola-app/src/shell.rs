@@ -3,8 +3,8 @@ use crate::actions::{
     ToggleTheme, Undo,
 };
 use crate::focused_editor::{
-    FocusedEditorElement, FocusedEditorStyle, approximate_editor_wrap_width,
-    move_cursor_vertical_visual, shape_focused_lines, spans_to_runs, visual_line_edge_offset,
+    FocusedEditorElement, FocusedEditorStyle, approximate_editor_wrap_width, generate_unified_runs,
+    move_cursor_vertical_visual, shape_focused_lines, visual_line_edge_offset,
     visual_line_ranges,
 };
 use crate::project_panel::ProjectPanel;
@@ -19,8 +19,9 @@ use gpui::{
 };
 
 use sola_core::sample_markdown;
-use sola_document::highlighter::SyntaxHighlighter;
-use sola_document::{BlockKind, DocumentBlock, DocumentModel, HtmlAdapter, HtmlNode, TypstAdapter};
+use sola_document::{
+    BlockKind, CursorState, DocumentBlock, DocumentModel, HtmlAdapter, HtmlNode, TypstAdapter,
+};
 use sola_theme::{Theme, parse_hex_color};
 use sola_typst::{RenderKind, TypstError, compile_to_svg};
 use std::{
@@ -40,14 +41,12 @@ pub struct SolaRoot {
     this_handle: Option<WeakEntity<Self>>,
     workspace: Entity<Workspace>,
     project_panel: Entity<ProjectPanel>,
-    highlighter: SyntaxHighlighter,
     typst_cache: HashMap<String, TypstAdapter>,
     typst_in_flight: HashSet<String>,
     cursor_visible: bool,
     cursor_blink_started: bool,
     active_menu: Option<&'static str>,
     active_submenu: Option<&'static str>,
-    document_list_state: gpui::ListState,
     show_preferences: bool,
 }
 
@@ -85,21 +84,17 @@ impl SolaRoot {
         })
         .detach();
 
-        let document_list_state = gpui::ListState::new(0, gpui::ListAlignment::Top, px(1000.0));
-
         let mut this = Self {
             focus_handle: cx.focus_handle(),
             this_handle: None,
             workspace,
             project_panel,
-            highlighter: SyntaxHighlighter::new_rust(),
             typst_cache: HashMap::new(),
             typst_in_flight: HashSet::new(),
             cursor_visible: true,
             cursor_blink_started: false,
             active_menu: None,
             active_submenu: None,
-            document_list_state,
             show_preferences: false,
         };
 
@@ -990,8 +985,61 @@ impl SolaRoot {
         let document = active_doc_opt.unwrap();
         self.ensure_cursor_blink_loop(cx);
 
-        self.document_list_state.reset(document.block_count());
-        let weak_handle = cx.weak_entity();
+        let editor_style = FocusedEditorStyle::from_theme(&theme);
+        let full_text = document.source().to_string();
+
+        let focused_block_idx = document.focused_block();
+        let local_cursor = document.focused_cursor().cloned().unwrap_or_default();
+        let global_cursor_head = document
+            .block_local_to_global_offset(focused_block_idx, local_cursor.head)
+            .unwrap_or(0);
+        let global_cursor_anchor = local_cursor
+            .anchor
+            .and_then(|a| document.block_local_to_global_offset(focused_block_idx, a));
+
+        let global_cursor = Some(global_cursor_head);
+        let runs = generate_unified_runs(&document, global_cursor, &editor_style, &theme);
+
+        let selection_color = rgb_hex(&theme.palette.selection);
+        let cursor_color = rgb_hex(&theme.palette.cursor);
+        let on_cursor_handle = self.this_handle.clone();
+        let focus_handle = self.focus_handle.clone();
+
+        let editor_element = FocusedEditorElement::new(
+            full_text,
+            editor_style,
+            runs,
+            Some(CursorState {
+                head: global_cursor_head,
+                anchor: global_cursor_anchor,
+            }),
+            self.cursor_visible,
+            selection_color,
+            cursor_color,
+        )
+        .on_cursor_move(move |global_offset, shift, window, cx| {
+            if let Some(this_handle) = &on_cursor_handle {
+                let _ = this_handle.update(cx, |this, cx| {
+                    this.workspace.update(cx, |workspace, cx| {
+                        window.focus(&focus_handle);
+                        this.cursor_visible = true;
+                        workspace.update_active_document(cx, |doc| {
+                            if let Some((block_idx, local_offset)) =
+                                doc.global_offset_to_block_local(global_offset)
+                            {
+                                if doc.focused_block() != block_idx {
+                                    if doc.focused_has_draft() {
+                                        doc.apply_focused_draft();
+                                    }
+                                    doc.focus_block(block_idx);
+                                }
+                                doc.set_focused_cursor(local_offset, shift);
+                            }
+                        });
+                    });
+                });
+            }
+        });
 
         div()
             .flex()
@@ -1021,146 +1069,9 @@ impl SolaRoot {
                             .py(px(32.0))
                             .max_w(px(900.0))
                             .mx_auto()
-                            .child(
-                                gpui::list(
-                                    self.document_list_state.clone(),
-                                    move |idx, _window, cx| {
-                                        let weak_handle = weak_handle.clone();
-                                        weak_handle
-                                            .update(cx, |this, cx| {
-                                                let workspace = this.workspace.read(cx);
-                                                let theme = workspace.theme();
-                                                let Some(doc) = workspace.active_document_ref()
-                                                else {
-                                                    return div().into_any_element();
-                                                };
-                                                let Some(block) = doc.blocks().get(idx) else {
-                                                    return div().into_any_element();
-                                                };
-
-                                                this.render_block(
-                                                    idx,
-                                                    block,
-                                                    doc,
-                                                    theme,
-                                                    weak_handle.clone(),
-                                                )
-                                                .into_any_element()
-                                            })
-                                            .unwrap_or_else(|_| div().into_any_element())
-                                    },
-                                )
-                                .size_full(),
-                            ),
+                            .child(editor_element),
                     ),
             )
-    }
-
-    fn render_block(
-        &self,
-        index: usize,
-        block: &DocumentBlock,
-        document: &DocumentModel,
-        theme: &Theme,
-        this_handle: WeakEntity<Self>,
-    ) -> impl IntoElement {
-        let is_focused = document.focused_block() == index;
-
-        let block_container = div()
-            .id(("block-container", index))
-            .flex()
-            .flex_row()
-            .gap(px(12.0))
-            .p(px(8.0))
-            .cursor_pointer();
-
-        // Subtle focused indicator (accent color line on the left)
-        let indicator = if is_focused {
-            div()
-                .w(px(2.0))
-                .bg(rgb_hex(&theme.palette.accent))
-                .rounded_full()
-        } else {
-            div().w(px(2.0))
-        };
-
-        let content = if is_focused {
-            let editor_style = FocusedEditorStyle::from_theme(theme);
-            let text = document.focused_text().unwrap_or(&block.source).to_string();
-            let spans = self.highlighter.highlight(&text);
-            let runs = spans_to_runs(&spans, &editor_style, theme);
-            let selection_color = rgb_hex(&theme.palette.selection);
-            let cursor_color = rgb_hex(&theme.palette.cursor);
-
-            let on_cursor_handle = this_handle.clone();
-            let cursor_state = document.focused_cursor().cloned();
-            let focus_handle = self.focus_handle.clone();
-
-            div().flex_1().child(
-                div()
-                    .bg(rgb_hex(&theme.palette.code_background))
-                    .rounded(px(8.0))
-                    .child(
-                        FocusedEditorElement::new(
-                            text,
-                            editor_style,
-                            runs,
-                            cursor_state,
-                            self.cursor_visible,
-                            selection_color,
-                            cursor_color,
-                        )
-                        .on_cursor_move(
-                            move |offset, shift, window, cx| {
-                                let _ = on_cursor_handle.update(cx, |this, cx| {
-                                    this.workspace.update(cx, |workspace, cx| {
-                                        window.focus(&focus_handle);
-                                        this.cursor_visible = true;
-                                        workspace.update_active_document(cx, |doc| {
-                                            doc.set_focused_cursor(offset, shift);
-                                        });
-                                    });
-                                });
-                            },
-                        ),
-                    ),
-            )
-        } else {
-            div()
-                .flex_1()
-                .child(self.render_blurred_content(block, theme))
-        };
-
-        let click_handle = this_handle.clone();
-        let focused_block_idx = document.focused_block();
-        let has_draft = document.focused_has_draft();
-        let focus_handle = self.focus_handle.clone();
-
-        block_container
-            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
-                let _ = click_handle.update(cx, |this, cx| {
-                    this.workspace.update(cx, |workspace, cx| {
-                        workspace.update_active_document(cx, |doc| {
-                            let plan = plan_block_click(focused_block_idx, index, has_draft);
-
-                            if plan.apply_draft {
-                                doc.apply_focused_draft();
-                            }
-
-                            if plan.switch_block_focus {
-                                doc.focus_block(index);
-                            }
-
-                            if plan.refresh_window_focus {
-                                window.focus(&focus_handle);
-                            }
-                        });
-                    });
-                });
-            })
-            .child(indicator)
-            .child(content)
-            .into_any_element()
     }
 
     fn render_blurred_content(&self, block: &DocumentBlock, theme: &Theme) -> Div {
