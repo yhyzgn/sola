@@ -73,8 +73,8 @@ impl FocusedEditorStyle {
             font_family: "JetBrains Mono",
             font_size,
             line_height,
-            padding_x: px(6.0),
-            padding_y: px(6.0),
+            padding_x: px(40.0),
+            padding_y: px(20.0),
             caret_width: px(2.0),
         }
     }
@@ -691,7 +691,7 @@ impl Element for FocusedEditorElement {
                             let quote_bar_bounds = Bounds {
                                 origin: text_bounds.origin
                                     + Point {
-                                        x: px(-14.0),
+                                        x: px(-20.0),
                                         y: first.y_offset,
                                     },
                                 size: gpui::size(
@@ -708,11 +708,11 @@ impl Element for FocusedEditorElement {
                             let bg_bounds = Bounds {
                                 origin: text_bounds.origin
                                     + Point {
-                                        x: px(-8.0),
+                                        x: px(-10.0),
                                         y: first.y_offset - px(4.0),
                                     },
                                 size: gpui::size(
-                                    bounds.size.width - self.style.padding_x,
+                                    text_bounds.size.width + px(20.0),
                                     last.y_offset + last.line_height - first.y_offset + px(8.0),
                                 ),
                             };
