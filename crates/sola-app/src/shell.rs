@@ -47,6 +47,7 @@ pub struct SolaRoot {
     active_menu: Option<&'static str>,
     active_submenu: Option<&'static str>,
     show_preferences: bool,
+    sidebar_visible: bool,
 }
 
 impl SolaRoot {
@@ -88,6 +89,7 @@ impl SolaRoot {
             active_menu: None,
             active_submenu: None,
             show_preferences: false,
+            sidebar_visible: false,
         };
 
         this.trigger_typst_renders(cx);
@@ -1491,7 +1493,9 @@ impl Render for SolaRoot {
                         .flex()
                         .flex_row()
                         .min_h_0()
-                        .child(self.project_panel.clone())
+                        .when(self.sidebar_visible, |this| {
+                            this.child(self.project_panel.clone())
+                        })
                         .child(
                             div()
                                 .flex_1()
