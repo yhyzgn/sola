@@ -13,8 +13,8 @@ use crate::worktree::Worktree;
 use gpui::prelude::{FluentBuilder, StatefulInteractiveElement, Styled};
 use gpui::{
     AppContext, Application, AsyncApp, Bounds, Context, Div, Entity, FocusHandle, FontWeight, Hsla,
-    Image, ImageFormat, InteractiveElement, IntoElement, KeyBinding, Menu, MenuItem, MouseButton,
-    ParentElement, Render, WeakEntity, Window, WindowBounds, WindowOptions, div, img, px, rgb,
+    InteractiveElement, IntoElement, KeyBinding, Menu, MenuItem, MouseButton,
+    ParentElement, Render, WeakEntity, Window, WindowBounds, WindowOptions, div, px, rgb,
     size,
 };
 
@@ -26,7 +26,6 @@ use sola_theme::{Theme, parse_hex_color};
 use sola_typst::{RenderKind, TypstError, compile_to_svg};
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
     time::Duration,
 };
 #[cfg(target_os = "linux")]
@@ -48,13 +47,6 @@ pub struct SolaRoot {
     active_menu: Option<&'static str>,
     active_submenu: Option<&'static str>,
     show_preferences: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct BlockClickPlan {
-    apply_draft: bool,
-    switch_block_focus: bool,
-    refresh_window_focus: bool,
 }
 
 impl SolaRoot {
@@ -1072,353 +1064,6 @@ impl SolaRoot {
             )
     }
 
-    fn render_blurred_content(&self, block: &DocumentBlock, theme: &Theme) -> Div {
-        match &block.kind {
-            BlockKind::Heading { level } => div()
-                .flex()
-                .flex_col()
-                .gap(px(6.0))
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(rgb_hex(&theme.palette.accent))
-                        .child(format!("Heading level {}", level)),
-                )
-                .child(
-                    div()
-                        .text_size(px(match level {
-                            1 => 28.0,
-                            2 => 24.0,
-                            3 => 20.0,
-                            _ => 18.0,
-                        }))
-                        .font_weight(FontWeight::BOLD)
-                        .child(block.rendered.clone()),
-                ),
-            BlockKind::Paragraph => {
-                if block.typst.is_some() {
-                    self.render_typst_preview(block, "Paragraph", theme)
-                } else {
-                    self.render_textual_block(
-                        block,
-                        theme.typography.body_size as f32,
-                        &theme.palette.text_primary,
-                        theme,
-                    )
-                }
-            }
-            BlockKind::ListItem { ordered } => div()
-                .flex()
-                .gap(px(10.0))
-                .child(
-                    div()
-                        .text_color(rgb_hex(&theme.palette.accent))
-                        .font_weight(FontWeight::BOLD)
-                        .child(if *ordered { "1." } else { "•" }),
-                )
-                .child(if block.typst.is_some() {
-                    self.render_typst_preview(block, "List item", theme)
-                } else {
-                    self.render_textual_block(
-                        block,
-                        theme.typography.body_size as f32,
-                        &theme.palette.text_primary,
-                        theme,
-                    )
-                }),
-            BlockKind::Quote => div()
-                .flex()
-                .gap(px(12.0))
-                .child(
-                    div()
-                        .w(px(4.0))
-                        .bg(rgb_hex(&theme.palette.accent))
-                        .rounded_full(),
-                )
-                .child(if block.typst.is_some() {
-                    self.render_typst_preview(block, "Quote", theme)
-                } else {
-                    self.render_textual_block(
-                        block,
-                        theme.typography.body_size as f32,
-                        &theme.palette.text_muted,
-                        theme,
-                    )
-                }),
-            BlockKind::CodeFence { language } => div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(rgb_hex(&theme.palette.text_muted))
-                        .child(format!(
-                            "Code block · {}",
-                            language.as_ref().unwrap_or(&"plain text".to_string())
-                        )),
-                )
-                .child(
-                    div()
-                        .id(("code-preview", block.id))
-                        .p(px(14.0))
-                        .bg(rgb_hex(&theme.palette.code_background))
-                        .rounded(px(10.0))
-                        .overflow_x_scroll()
-                        .child(
-                            div()
-                                .text_size(px(theme.typography.code_size as f32))
-                                .text_color(rgb_hex(&theme.palette.text_primary))
-                                .child(block.rendered.clone()),
-                        ),
-                ),
-            BlockKind::MathBlock => self.render_typst_preview(block, "Math block", theme),
-            BlockKind::TypstBlock => self.render_typst_preview(block, "Typst block", theme),
-        }
-    }
-
-    fn render_typst_preview(&self, block: &DocumentBlock, label: &str, theme: &Theme) -> Div {
-        let preview_height = match block.kind {
-            BlockKind::MathBlock | BlockKind::TypstBlock => 160.0,
-            BlockKind::Heading { .. }
-            | BlockKind::Paragraph
-            | BlockKind::ListItem { .. }
-            | BlockKind::Quote
-            | BlockKind::CodeFence { .. } => 56.0,
-        };
-
-        match block.typst.as_ref() {
-            Some(TypstAdapter::Pending) => div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(rgb_hex(&theme.palette.text_muted))
-                        .child(format!("{label} · rendering")),
-                )
-                .child(
-                    div()
-                        .p(px(14.0))
-                        .bg(rgb_hex(&theme.palette.code_background))
-                        .rounded(px(10.0))
-                        .text_size(px(13.0))
-                        .text_color(rgb_hex(&theme.palette.text_muted))
-                        .child("Rendering Typst preview..."),
-                ),
-            Some(TypstAdapter::Rendered { svg }) => div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(rgb_hex(&theme.palette.text_muted))
-                        .child(format!("{label} · rendered")),
-                )
-                .child(
-                    div()
-                        .p(px(14.0))
-                        .bg(rgb_hex(&theme.palette.code_background))
-                        .rounded(px(10.0))
-                        .border_1()
-                        .border_color(rgb_hex(&theme.palette.panel_border))
-                        .child(
-                            img(Arc::new(Image::from_bytes(
-                                ImageFormat::Svg,
-                                svg.as_bytes().to_vec(),
-                            )))
-                            .w_full()
-                            .h(px(preview_height)),
-                        ),
-                ),
-            Some(TypstAdapter::Error { message }) => div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(rgb_hex(&theme.palette.text_muted))
-                        .child(format!("{label} · error")),
-                )
-                .child(
-                    div()
-                        .p(px(14.0))
-                        .bg(rgb_hex(&theme.palette.code_background))
-                        .rounded(px(10.0))
-                        .border_1()
-                        .border_color(rgb_hex(&theme.palette.panel_border))
-                        .child(
-                            div()
-                                .text_size(px(13.0))
-                                .text_color(rgb_hex("#ff6b6b"))
-                                .child(message.clone()),
-                        )
-                        .child(
-                            div()
-                                .mt(px(10.0))
-                                .text_size(px(12.0))
-                                .text_color(rgb_hex(&theme.palette.text_muted))
-                                .child(block.rendered.clone()),
-                        ),
-                ),
-            None => div()
-                .text_size(px(theme.typography.body_size as f32))
-                .text_color(rgb_hex(&theme.palette.text_primary))
-                .child(block.rendered.clone()),
-        }
-    }
-
-    fn render_textual_block(
-        &self,
-        block: &DocumentBlock,
-        default_size: f32,
-        color: &str,
-        theme: &Theme,
-    ) -> Div {
-        match &block.html {
-            Some(HtmlAdapter::Adapted { nodes }) => {
-                self.render_html_nodes(nodes, default_size, color, theme)
-            }
-            Some(HtmlAdapter::Unsupported { raw }) => div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(pill(
-                    "html adapter",
-                    "degraded unsupported html".to_string(),
-                    theme,
-                ))
-                .child(
-                    div()
-                        .p(px(14.0))
-                        .bg(rgb_hex(&theme.palette.code_background))
-                        .rounded(px(10.0))
-                        .text_size(px(13.0))
-                        .text_color(rgb_hex(&theme.palette.text_muted))
-                        .child(raw.clone()),
-                ),
-            None => div()
-                .text_size(px(default_size))
-                .text_color(rgb_hex(color))
-                .child(block.rendered.clone()),
-        }
-    }
-
-    fn render_html_nodes(
-        &self,
-        nodes: &[HtmlNode],
-        default_size: f32,
-        default_color: &str,
-        theme: &Theme,
-    ) -> Div {
-        nodes.iter().fold(
-            div().flex().flex_wrap().items_center().gap(px(0.0)),
-            |content, node| match node {
-                HtmlNode::Text(text) => content.child(
-                    div()
-                        .text_size(px(default_size))
-                        .text_color(rgb_hex(default_color))
-                        .child(text.clone()),
-                ),
-                HtmlNode::StyledText(styled) => {
-                    let color = styled
-                        .color
-                        .as_deref()
-                        .filter(|value| parse_hex_color(value).is_some())
-                        .unwrap_or(default_color);
-                    let size = styled
-                        .font_size_px
-                        .map(|size| size as f32)
-                        .unwrap_or(default_size);
-
-                    content.child(
-                        div()
-                            .text_size(px(size))
-                            .text_color(rgb_hex(color))
-                            .child(styled.text.clone()),
-                    )
-                }
-                HtmlNode::InlineMath(math) => {
-                    let cache_key = typst_cache_key(&RenderKind::Math, math);
-                    if let Some(TypstAdapter::Rendered { svg }) = self.typst_cache.get(&cache_key) {
-                        content.child(
-                            div().mx(px(4.0)).child(
-                                img(Arc::new(Image::from_bytes(
-                                    ImageFormat::Svg,
-                                    svg.as_bytes().to_vec(),
-                                )))
-                                .h(px(default_size * 1.3)),
-                            ),
-                        )
-                    } else {
-                        content.child(
-                            div()
-                                .text_size(px(default_size))
-                                .text_color(rgb_hex(&theme.palette.accent))
-                                .child(format!("${}$", math)),
-                        )
-                    }
-                }
-                HtmlNode::Image(image) => content.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .px(px(12.0))
-                        .py(px(10.0))
-                        .bg(rgb_hex(&theme.palette.code_background))
-                        .rounded(px(10.0))
-                        .border_1()
-                        .border_color(rgb_hex(&theme.palette.panel_border))
-                        .child(
-                            div()
-                                .text_size(px(12.0))
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(rgb_hex(&theme.palette.accent))
-                                .child("IMG"),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(4.0))
-                                .child(
-                                    div()
-                                        .text_size(px(13.0))
-                                        .text_color(rgb_hex(&theme.palette.text_primary))
-                                        .child(
-                                            image
-                                                .alt
-                                                .clone()
-                                                .unwrap_or_else(|| "no alt text".to_string()),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.0))
-                                        .text_color(rgb_hex(&theme.palette.text_muted))
-                                        .child(format!(
-                                            "{}{}",
-                                            image
-                                                .width_px
-                                                .map(|width| format!("width {}px", width))
-                                                .unwrap_or_else(|| "width auto".to_string()),
-                                            image
-                                                .src
-                                                .as_ref()
-                                                .map(|src| format!(" · {}", src))
-                                                .unwrap_or_default()
-                                        )),
-                                ),
-                        ),
-                ),
-            },
-        )
-    }
-
     fn trigger_typst_renders(&mut self, cx: &mut Context<Self>) {
         let requests = {
             let workspace = self.workspace.read(cx);
@@ -1747,7 +1392,6 @@ impl SolaRoot {
             global_start: 0,
             source_len: text.len(),
             is_focused: true,
-            kind: BlockKind::Paragraph,
         }];
 
         move_cursor_vertical_visual(&visual_lines, &blocks, cursor.head, delta)
@@ -1969,31 +1613,6 @@ fn section_title(title: &str, theme: &Theme) -> Div {
         .child(title.to_string())
 }
 
-fn pill(label: &str, value: String, theme: &Theme) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(8.0))
-        .px(px(12.0))
-        .py(px(8.0))
-        .bg(rgb_hex(&theme.palette.panel_background))
-        .rounded(px(999.0))
-        .border_1()
-        .border_color(rgb_hex(&theme.palette.panel_border))
-        .child(
-            div()
-                .text_size(px(12.0))
-                .text_color(rgb_hex(&theme.palette.text_muted))
-                .child(label.to_string()),
-        )
-        .child(
-            div()
-                .text_size(px(12.0))
-                .text_color(rgb_hex(&theme.palette.text_primary))
-                .child(value),
-        )
-}
-
 fn action_button(label: String, theme: &Theme, active: bool) -> Div {
     let border = if active {
         rgb_hex(&theme.palette.focused_border)
@@ -2097,14 +1716,6 @@ fn apply_typst_result(block: &mut DocumentBlock, result: Result<String, TypstErr
     block.typst = Some(typst_adapter_from_result(result));
 
     true
-}
-
-fn plan_block_click(current_index: usize, target_index: usize, has_draft: bool) -> BlockClickPlan {
-    BlockClickPlan {
-        apply_draft: has_draft && current_index != target_index,
-        switch_block_focus: current_index != target_index,
-        refresh_window_focus: true,
-    }
 }
 
 fn typst_cache_key(kind: &RenderKind, source: &str) -> String {
@@ -2239,8 +1850,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     use super::unix_socket_reachable;
     use super::{
-        BlockClickPlan, apply_cached_typst_adapter, apply_completed_typst_work, apply_typst_result,
-        plan_block_click, should_start_typst_compile, typst_adapter_from_result, typst_cache_key,
+        apply_cached_typst_adapter, apply_completed_typst_work, apply_typst_result,
+        should_start_typst_compile, typst_adapter_from_result, typst_cache_key,
         typst_render_request,
     };
     use sola_document::{DocumentModel, TypstAdapter};
@@ -2427,25 +2038,5 @@ $$a + b$$"#,
             document.blocks()[1].typst,
             Some(TypstAdapter::Rendered { ref svg }) if svg == "<svg>stable</svg>"
         ));
-    }
-
-    #[test]
-    fn plan_block_click_keeps_focus_refresh_for_same_block() {
-        assert_eq!(
-            plan_block_click(2, 2, true),
-            BlockClickPlan {
-                apply_draft: false,
-                switch_block_focus: false,
-                refresh_window_focus: true,
-            }
-        );
-        assert_eq!(
-            plan_block_click(1, 3, true),
-            BlockClickPlan {
-                apply_draft: true,
-                switch_block_focus: true,
-                refresh_window_focus: true,
-            }
-        );
     }
 }

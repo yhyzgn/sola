@@ -94,7 +94,7 @@ git commit -m "feat(document): add global to block local cursor offset conversio
 - Modify: `crates/sola-app/src/focused_editor.rs`
 - Test: `crates/sola-app/src/focused_editor.rs`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 // in crates/sola-app/src/focused_editor.rs (mod tests)
@@ -114,12 +114,12 @@ fn test_unified_text_run_generation() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p sola-app test_unified_text_run_generation`
 Expected: FAIL with "not found in this scope"
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 ```rust
 // in crates/sola-app/src/focused_editor.rs
@@ -131,68 +131,16 @@ pub fn generate_unified_runs(
     style: &FocusedEditorStyle,
     theme: &Theme,
 ) -> Vec<TextRun> {
-    let mut runs = Vec::new();
-    let mut current_global = 0;
-    
-    let focused_block_idx = global_cursor.and_then(|c| doc.global_offset_to_block_local(c).map(|(idx, _)| idx));
-
-    for (i, block) in doc.blocks().iter().enumerate() {
-        let is_focused = focused_block_idx == Some(i);
-        
-        if is_focused {
-            // Source Mode
-            let mut highlighter = SyntaxHighlighter::new_rust(); // Or appropriate language
-            let spans = highlighter.highlight(&block.source, "markdown");
-            let mut block_runs = spans_to_runs(&spans, style, theme);
-            runs.append(&mut block_runs);
-        } else {
-            // Rich Text Mode (Simplified for now, just proportional font)
-            runs.push(TextRun {
-                len: block.source.len(),
-                font: Font {
-                    family: "System UI".into(), // Or another proportional font
-                    features: FontFeatures::default(),
-                    fallbacks: None,
-                    weight: FontWeight::default(),
-                    style: FontStyle::default(),
-                },
-                color: rgb_hex(&theme.palette.text_primary),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            });
-        }
-
-        // Add spacing runs for block separation if it's not the last block
-        if i < doc.blocks().len() - 1 {
-            runs.push(TextRun {
-                len: 2, // "\n\n"
-                font: Font {
-                    family: style.font_family.into(),
-                    features: FontFeatures::default(),
-                    fallbacks: None,
-                    weight: FontWeight::default(),
-                    style: FontStyle::default(),
-                },
-                color: gpui::rgba(0x00000000).into(), // Transparent
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            });
-        }
-        current_global += block.source.len() + 2;
-    }
-    
-    runs
+    // ... (Implementation with dual-state live preview)
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cargo test -p sola-app test_unified_text_run_generation`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/sola-app/src/focused_editor.rs

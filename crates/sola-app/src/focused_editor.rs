@@ -346,7 +346,6 @@ pub struct EditorBlock {
     pub global_start: usize,
     pub source_len: usize,
     pub is_focused: bool,
-    pub kind: BlockKind,
 }
 
 impl EditorBlock {
@@ -440,7 +439,6 @@ pub fn generate_editor_blocks(
             global_start: current_global,
             source_len,
             is_focused,
-            kind: block.kind.clone(),
         });
 
         current_global += source_len + 2; // +2 for \n\n
@@ -511,7 +509,6 @@ pub fn layout_editor_blocks(
 }
 
 pub struct FocusedEditorState {
-    lines: Vec<WrappedLine>,
     visual_lines: Vec<VisualLineRef>,
 }
 
@@ -538,17 +535,11 @@ impl Element for FocusedEditorElement {
         let wrap_width = approximate_editor_wrap_width(window.bounds().size.width);
 
         let visual_lines = layout_editor_blocks(window, &self.blocks, wrap_width);
-        let all_lines = visual_lines
-            .iter()
-            .filter(|l| l.local_row == 0)
-            .map(|l| l.line.clone())
-            .collect();
 
         let layout_id = window.request_layout(style, None, cx);
         (
             layout_id,
             FocusedEditorState {
-                lines: all_lines,
                 visual_lines,
             },
         )
@@ -827,7 +818,6 @@ mod tests {
             global_start: 0,
             source_len: 4,
             is_focused: true,
-            kind: sola_document::BlockKind::Heading { level: 1 },
         };
         assert_eq!(focused.rendered_to_source(2), 2);
         assert_eq!(focused.source_to_rendered(2), 2);
@@ -841,7 +831,6 @@ mod tests {
             global_start: 0,
             source_len: 4, // "# H1"
             is_focused: false,
-            kind: sola_document::BlockKind::Heading { level: 1 },
         };
         // Index 0 in "H1" is index 2 in "# H1"
         assert_eq!(blurred.rendered_to_source(0), 2);
