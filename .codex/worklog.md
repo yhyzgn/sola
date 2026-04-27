@@ -563,6 +563,12 @@
     - 打通 `Workspace` 初始化与持久化链路：启动时自动加载配置，变更时（切换主题、打开文件）自动同步磁盘。
     - 补齐了 `ThemeMode` 的 `serde` 支持。
     - 验证通过：`cargo check` 正常，配置读写逻辑单元测试覆盖。
+22. 启动 Typora 对齐体验深度重构设计 (Brainstorming)：
+    - 确认了核心重构路径：废弃基于 GPUI Flex 的 `div-soup` 拼接，全面转向基于自定义 `gpui::Element` 的单文本流缓冲区渲染（Unified Text Buffer）。
+    - 敲定了跨块连贯选区方案：将原先基于 Block 局部的选区模型，重构为基于整个文档 `Global UTF-8 Byte Offset` 的坐标系。
+    - 敲定了 Live Preview 混合排版方案：在一个完整的排版流中，光标命中块渲染为带高亮的源码态（Monospace），未命中块渲染为无标记的富文本态（Proportional Font），并支持在排版流中直接嵌入内联 SVG（公式）。
+    - 产出了设计文档：`docs/superpowers/specs/2026-04-27-typora-parity-architecture-design.md`。
+    - 产出了实施计划：`docs/superpowers/plans/2026-04-27-typora-parity-implementation.md`。
 
 12. **修复菜单显示与快捷键响应问题**：
     - **初始获焦机制**：在窗口创建后显式调用 `window.focus()`，确保 `SolaRoot` 能够第一时间捕获并分发 Action。
