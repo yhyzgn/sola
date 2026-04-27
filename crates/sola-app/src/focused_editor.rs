@@ -4,8 +4,8 @@ use gpui::{
     MouseMoveEvent, Pixels, Point, SharedString, Style, TextAlign, TextRun, Window, WrappedLine,
     px,
 };
-use sola_document::CursorState;
-use sola_document::highlighter::{HighlightKind, HighlightedSpan};
+use sola_document::{CursorState, DocumentModel};
+use sola_document::highlighter::{HighlightKind, HighlightedSpan, SyntaxHighlighter};
 use sola_theme::{Theme, parse_hex_color};
 use std::sync::Arc;
 
@@ -321,6 +321,67 @@ impl FocusedEditorElement {
     }
 }
 
+pub fn generate_unified_runs(
+    doc: &DocumentModel,
+    global_cursor: Option<usize>,
+    style: &FocusedEditorStyle,
+    theme: &Theme,
+) -> Vec<TextRun> {
+    let mut runs = Vec::new();
+
+    let focused_block_idx =
+        global_cursor.and_then(|c| doc.global_offset_to_block_local(c).map(|(idx, _)| idx));
+
+    let highlighter = SyntaxHighlighter::new_rust();
+
+    for (i, block) in doc.blocks().iter().enumerate() {
+        let is_focused = focused_block_idx == Some(i);
+
+        if is_focused {
+            // Source Mode
+            let spans = highlighter.highlight(&block.source);
+            let mut block_runs = spans_to_runs(&spans, style, theme);
+            runs.append(&mut block_runs);
+        } else {
+            // Rich Text Mode (Simplified for now, just proportional font)
+            runs.push(TextRun {
+                len: block.source.len(),
+                font: Font {
+                    family: "System UI".into(),
+                    features: FontFeatures::default(),
+                    fallbacks: None,
+                    weight: FontWeight::default(),
+                    style: FontStyle::default(),
+                },
+                color: rgb_hex(&theme.palette.text_primary),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            });
+        }
+
+        // Add spacing runs for block separation if it's not the last block
+        if i < doc.blocks().len() - 1 {
+            runs.push(TextRun {
+                len: 2, // "\n\n"
+                font: Font {
+                    family: style.font_family.into(),
+                    features: FontFeatures::default(),
+                    fallbacks: None,
+                    weight: FontWeight::default(),
+                    style: FontStyle::default(),
+                },
+                color: gpui::rgba(0x00000000).into(), // Transparent
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            });
+        }
+    }
+
+    runs
+}
+
 pub struct FocusedEditorState {
     lines: Vec<WrappedLine>,
     visual_lines: Vec<VisualLineRef>,
@@ -602,5 +663,21 @@ mod tests {
         assert_eq!(visual_line_edge_offset(&lines, 3, true), Some(10));
         assert_eq!(visual_line_edge_offset(&lines, 11, false), Some(11));
         assert_eq!(visual_line_edge_offset(&lines, 11, true), Some(14));
+    }
+
+    #[test]
+    fn test_unified_text_run_generation() {
+        let doc = DocumentModel::from_markdown("# H1\n\nText");
+        let theme = Theme::sola_dark();
+        let style = FocusedEditorStyle::from_theme(&theme);
+
+        // Cursor at 0 (inside H1), H1 is Source, Text is Rich
+        let runs = generate_unified_runs(&doc, Some(0), &style, &theme);
+
+        // Total runs should cover "# H1\n\nText"
+        // "# H1" (4) + "\n\n" (2) + "Text" (4) = 10
+        let total_len: usize = runs.iter().map(|r| r.len).sum();
+        assert_eq!(total_len, 10);
+        assert!(!runs.is_empty());
     }
 }
