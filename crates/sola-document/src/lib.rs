@@ -461,38 +461,42 @@ impl DocumentModel {
         self.move_cursor_vertical(1, shift)
     }
 
+    /// Converts a global UTF-8 byte offset to a `(block_index, local_offset)` tuple.
     pub fn global_offset_to_block_local(&self, global_offset: usize) -> Option<(usize, usize)> {
         let mut current_global = 0;
         for (i, block) in self.blocks.iter().enumerate() {
             let block_len = block.source.len();
-            let block_end = current_global + block_len;
-
-            if global_offset >= current_global && global_offset <= block_end {
+            // Check if the global offset falls within this block
+            if global_offset >= current_global && global_offset <= current_global + block_len {
                 return Some((i, global_offset - current_global));
             }
-            // +2 for the double newline between blocks (as defined in serialize_blocks)
-            current_global = block_end + 2;
+            // Advance global offset by block length + 2 for the "\n\n" separator
+            current_global += block_len + 2;
         }
         None
     }
 
+    /// Converts a `block_index` and a `local_offset` within that block to a global UTF-8 byte offset.
     pub fn block_local_to_global_offset(
         &self,
         block_index: usize,
         local_offset: usize,
     ) -> Option<usize> {
-        let mut current_global = 0;
-        for (i, block) in self.blocks.iter().enumerate() {
-            if i == block_index {
-                if local_offset <= block.source.len() {
-                    return Some(current_global + local_offset);
-                } else {
-                    return None;
-                }
-            }
-            current_global += block.source.len() + 2; // +2 for \n\n
+        if block_index >= self.blocks.len() {
+            return None;
         }
-        None
+
+        let mut global_offset = 0;
+        for i in 0..block_index {
+            global_offset += self.blocks[i].source.len() + 2; // +2 for "\n\n"
+        }
+
+        let block = &self.blocks[block_index];
+        if local_offset <= block.source.len() {
+            Some(global_offset + local_offset)
+        } else {
+            None
+        }
     }
 
     pub fn select_all(&mut self) -> bool {
@@ -1943,19 +1947,31 @@ Plain paragraph without math."#,
     }
 
     #[test]
-    fn test_global_cursor_conversion() {
-        let doc = DocumentModel::from_markdown("# H1\n\nPara");
-        assert_eq!(doc.source(), "# H1\n\nPara");
+    fn test_global_to_local_offset() {
+        let doc = DocumentModel::from_markdown("# Header\n\nParagraph text.");
 
-        // offset 6 is 'P'
-        // "# H1" is 4 chars
-        // "\n\n" is 2 chars
-        // Total before "Para" is 6
-        let (block_idx, local_offset) = doc.global_offset_to_block_local(6).unwrap();
-        assert_eq!(block_idx, 1);
-        assert_eq!(local_offset, 0);
+        // Global offset 0 -> Block 0, local offset 0 ('#')
+        assert_eq!(doc.global_offset_to_block_local(0), Some((0, 0)));
+        // Global offset 8 -> Block 0, local offset 8 (end of "# Header")
+        assert_eq!(doc.global_offset_to_block_local(8), Some((0, 8)));
 
-        let global_offset = doc.block_local_to_global_offset(1, 0).unwrap();
-        assert_eq!(global_offset, 6);
+        // Global offset 9 is the first '\n'
+        // Global offset 10 is the second '\n' - Wait, if 8 is end of block 0, and 9, 10 are separators, then 11 is start of block 1?
+        // Let's re-verify:
+        // 0 1 2 3 4 5 6 7 -> # Header (8 chars)
+        // 8 -> \n
+        // 9 -> \n
+        // 10 -> P
+        // So 10 is start of block 1.
+        assert_eq!(doc.global_offset_to_block_local(10), Some((1, 0)));
+    }
+
+    #[test]
+    fn test_local_to_global_offset() {
+        let doc = DocumentModel::from_markdown("# Header\n\nParagraph text.");
+
+        assert_eq!(doc.block_local_to_global_offset(0, 0), Some(0));
+        assert_eq!(doc.block_local_to_global_offset(0, 8), Some(8));
+        assert_eq!(doc.block_local_to_global_offset(1, 0), Some(10));
     }
 }
