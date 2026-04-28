@@ -137,8 +137,14 @@ pub fn shape_focused_lines(
 }
 
 pub fn approximate_editor_wrap_width(available_width: Pixels) -> Pixels {
-    let width = available_width - px(40.0);
-    if width > px(120.0) {
+    // We target a 900px centered container with 40px padding on each side.
+    // So the actual text wrap width should never exceed 900 - 80 = 820px.
+    let max_text_width = px(820.0);
+    let width = available_width - px(80.0); // Account for padding
+    
+    if width > max_text_width {
+        max_text_width
+    } else if width > px(120.0) {
         width
     } else {
         px(120.0)

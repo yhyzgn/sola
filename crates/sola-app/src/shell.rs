@@ -1493,9 +1493,7 @@ impl Render for SolaRoot {
                         .flex()
                         .flex_row()
                         .min_h_0()
-                        .when(self.sidebar_visible, |this| {
-                            this.child(self.project_panel.clone())
-                        })
+                        .child(self.project_panel.clone())
                         .child(
                             div()
                                 .flex_1()
