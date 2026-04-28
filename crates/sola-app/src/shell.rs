@@ -3,9 +3,7 @@ use crate::actions::{
     ToggleTheme, Undo,
 };
 use crate::focused_editor::{
-    EditorBlock, FocusedEditorElement, FocusedEditorStyle, approximate_editor_wrap_width,
-    generate_editor_blocks, move_cursor_vertical_visual, shape_focused_lines,
-    visual_line_edge_offset, visual_line_ranges,
+    FocusedEditorElement, FocusedEditorStyle, generate_editor_blocks,
 };
 use crate::project_panel::ProjectPanel;
 use crate::workspace::{Workspace, WorkspaceEvent};
@@ -47,7 +45,6 @@ pub struct SolaRoot {
     active_menu: Option<&'static str>,
     active_submenu: Option<&'static str>,
     show_preferences: bool,
-    sidebar_visible: bool,
 }
 
 impl SolaRoot {
@@ -89,7 +86,6 @@ impl SolaRoot {
             active_menu: None,
             active_submenu: None,
             show_preferences: false,
-            sidebar_visible: false,
         };
 
         this.trigger_typst_renders(cx);
@@ -1167,7 +1163,7 @@ impl SolaRoot {
     fn handle_focused_key_down(
         &mut self,
         event: &gpui::KeyDownEvent,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         self.cursor_visible = true;
@@ -1181,8 +1177,6 @@ impl SolaRoot {
         }
 
         self.workspace.update(cx, |workspace, cx| {
-            let theme = workspace.theme().clone();
-
             if primary && modifiers.shift && key.eq_ignore_ascii_case("z") {
                 return workspace
                     .update_active_document(cx, |doc| doc.redo())
@@ -1237,39 +1231,20 @@ impl SolaRoot {
 
             if key.eq_ignore_ascii_case("up") {
                 return workspace
-                    .update_active_document(cx, |doc| {
-                        if let Some(target) =
-                            self.soft_wrapped_vertical_target(-1, doc, &theme, window)
-                        {
-                            return doc.set_focused_cursor(target, modifiers.shift);
-                        }
-                        doc.move_cursor_up(modifiers.shift)
-                    })
+                    .update_active_document(cx, |doc| doc.move_cursor_up(modifiers.shift))
                     .unwrap_or(false);
             }
 
             if key.eq_ignore_ascii_case("down") {
                 return workspace
-                    .update_active_document(cx, |doc| {
-                        if let Some(target) =
-                            self.soft_wrapped_vertical_target(1, doc, &theme, window)
-                        {
-                            return doc.set_focused_cursor(target, modifiers.shift);
-                        }
-                        doc.move_cursor_down(modifiers.shift)
-                    })
+                    .update_active_document(cx, |doc| doc.move_cursor_down(modifiers.shift))
                     .unwrap_or(false);
             }
 
             if key.eq_ignore_ascii_case("home") {
                 return workspace
                     .update_active_document(cx, |doc| {
-                        if let Some(target) =
-                            self.visual_line_edge_offset(doc, &theme, window, false)
-                        {
-                            return doc.set_focused_cursor(target, modifiers.shift);
-                        }
-                        false
+                        doc.set_focused_cursor(0, modifiers.shift)
                     })
                     .unwrap_or(false);
             }
@@ -1277,12 +1252,8 @@ impl SolaRoot {
             if key.eq_ignore_ascii_case("end") {
                 return workspace
                     .update_active_document(cx, |doc| {
-                        if let Some(target) =
-                            self.visual_line_edge_offset(doc, &theme, window, true)
-                        {
-                            return doc.set_focused_cursor(target, modifiers.shift);
-                        }
-                        false
+                        let len = doc.focused_text().map(|t| t.len()).unwrap_or(0);
+                        doc.set_focused_cursor(len, modifiers.shift)
                     })
                     .unwrap_or(false);
             }
@@ -1364,64 +1335,6 @@ impl SolaRoot {
 
             false
         })
-    }
-
-    fn soft_wrapped_vertical_target(
-        &self,
-        delta: isize,
-        document: &DocumentModel,
-        theme: &Theme,
-        window: &mut Window,
-    ) -> Option<usize> {
-        let text = document.focused_text()?;
-        let cursor = document.focused_cursor()?;
-        let style = FocusedEditorStyle::from_theme(theme);
-        let wrap_width = approximate_editor_wrap_width(window.bounds().size.width);
-        let lines = shape_focused_lines(
-            window,
-            text,
-            &style,
-            rgb_hex(&theme.palette.text_primary),
-            wrap_width,
-        )?;
-
-        let visual_lines =
-            crate::focused_editor::collect_visual_lines(&lines, style.line_height, 0, 0);
-        let blocks = vec![EditorBlock {
-            text: text.to_string(),
-            runs: vec![],
-            font_size: style.font_size,
-            line_height: style.line_height,
-            global_start: 0,
-            is_focused: true,
-            kind: BlockKind::Paragraph,
-            inline_math: Vec::new(),
-        }];
-
-        move_cursor_vertical_visual(&visual_lines, &blocks, cursor.head, delta)
-    }
-
-    fn visual_line_edge_offset(
-        &self,
-        document: &DocumentModel,
-        theme: &Theme,
-        window: &mut Window,
-        line_end: bool,
-    ) -> Option<usize> {
-        let text = document.focused_text()?;
-        let cursor = document.focused_cursor()?;
-        let style = FocusedEditorStyle::from_theme(theme);
-        let wrap_width = approximate_editor_wrap_width(window.bounds().size.width);
-        let lines = shape_focused_lines(
-            window,
-            text,
-            &style,
-            rgb_hex(&theme.palette.text_primary),
-            wrap_width,
-        )?;
-
-        let visual = visual_line_ranges(&lines, style.line_height);
-        visual_line_edge_offset(&visual, cursor.head, line_end)
     }
 }
 
@@ -2044,3 +1957,4 @@ $$a + b$$"#,
         ));
     }
 }
+

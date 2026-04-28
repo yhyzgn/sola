@@ -13,6 +13,7 @@ pub struct VisualObject {
 /// A single visually wrapped line of text, plus any objects that appear on this line.
 #[derive(Clone)]
 pub struct VisualLine {
+    pub block_index: usize,
     pub global_start: usize,
     pub global_end: usize,
     pub bounds: Bounds<Pixels>,
@@ -43,7 +44,7 @@ pub fn layout_document(
     let mut doc = VisualDocument::new();
     let mut current_y = Pixels::ZERO;
 
-    for block in blocks {
+    for (block_index, block) in blocks.iter().enumerate() {
         let lines = window
             .text_system()
             .shape_text(
@@ -101,6 +102,7 @@ pub fn layout_document(
                 }
 
                 doc.lines.push(VisualLine {
+                    block_index,
                     global_start,
                     global_end,
                     bounds,

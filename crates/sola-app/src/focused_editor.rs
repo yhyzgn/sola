@@ -1,7 +1,7 @@
 use gpui::{
     App, Bounds, Element, ElementId, Font, FontFeatures, FontStyle, FontWeight,
-    GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, Point, SharedString,
-    Style, TextRun, Window, WrappedLine, px,
+    GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, Point,
+    Style, TextRun, Window, px,
 };
 use sola_document::{BlockKind, CursorState, DocumentModel, TypstAdapter};
 use sola_document::highlighter::{HighlightKind, HighlightedSpan, SyntaxHighlighter};
@@ -80,62 +80,6 @@ impl FocusedEditorStyle {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WrappedVisualLine {
-    pub start: usize,
-    pub end: usize,
-    pub row: usize,
-}
-
-#[derive(Clone)]
-pub(crate) struct VisualLineRef {
-    global_start: usize,
-    global_end: usize,
-    rendered_local_start: usize,
-    wrapped_line_start: usize,
-    local_row: usize,
-    global_row: usize,
-    y_offset: Pixels,
-    line_height: Pixels,
-    block_index: usize,
-    line: WrappedLine,
-}
-
-pub fn shape_focused_lines(
-    window: &mut Window,
-    text: &str,
-    style: &FocusedEditorStyle,
-    color: Hsla,
-    wrap_width: Pixels,
-) -> Option<Vec<WrappedLine>> {
-    let run = TextRun {
-        len: text.len(),
-        font: Font {
-            family: style.font_family.into(),
-            features: FontFeatures::default(),
-            fallbacks: None,
-            weight: FontWeight::default(),
-            style: FontStyle::default(),
-        },
-        color,
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-
-    window
-        .text_system()
-        .shape_text(
-            SharedString::from(text.to_string()),
-            style.font_size,
-            &[run],
-            Some(wrap_width),
-            None,
-        )
-        .ok()
-        .map(|lines| lines.into_vec())
-}
-
 pub fn approximate_editor_wrap_width(available_width: Pixels) -> Pixels {
     // We target a 900px centered container with 40px padding on each side.
     // So the actual text wrap width should never exceed 900 - 80 = 820px.
@@ -149,139 +93,6 @@ pub fn approximate_editor_wrap_width(available_width: Pixels) -> Pixels {
     } else {
         px(120.0)
     }
-}
-
-pub fn move_cursor_vertical_visual(
-    visual_lines: &[VisualLineRef],
-    blocks: &[EditorBlock],
-    current_offset: usize,
-    delta: isize,
-) -> Option<usize> {
-    let current_visual_line_idx = find_visual_line_ref(visual_lines, current_offset)?;
-    let target_global_row = shift_visual_row(
-        visual_lines.get(current_visual_line_idx)?.global_row,
-        delta,
-        visual_lines.len(),
-    )?;
-    let target_visual_line_idx = visual_lines
-        .iter()
-        .position(|line| line.global_row == target_global_row)?;
-    let current = &visual_lines[current_visual_line_idx];
-    let target = &visual_lines[target_visual_line_idx];
-
-    let current_block = &blocks[current.block_index];
-    let target_block = &blocks[target.block_index];
-
-    let current_rendered_offset =
-        current_block.source_to_rendered(current_offset - current_block.global_start);
-    let current_local = current_rendered_offset.saturating_sub(current.rendered_local_start);
-
-    let current_point = current.line.position_for_index(
-        current.wrapped_line_start + current_local,
-        current.line_height,
-    )?;
-
-    let target_local_rendered = target
-        .line
-        .closest_index_for_position(
-            Point {
-                x: current_point.x,
-                y: target.line_height * target.local_row as f32,
-            },
-            target.line_height,
-        )
-        .unwrap_or_else(|index| index);
-
-    let target_rendered_offset = target.rendered_local_start
-        + target_local_rendered.saturating_sub(target.wrapped_line_start);
-
-    Some(target_block.global_start + target_block.rendered_to_source(target_rendered_offset))
-}
-
-pub fn visual_line_edge_offset(
-    lines: &[WrappedVisualLine],
-    current_offset: usize,
-    line_end: bool,
-) -> Option<usize> {
-    let current_visual_line = find_visual_line(lines, current_offset)?;
-    let line = lines.get(current_visual_line)?;
-
-    Some(if line_end { line.end } else { line.start })
-}
-
-pub(crate) fn collect_visual_lines(
-    lines: &[WrappedLine],
-    line_height: Pixels,
-    block_index: usize,
-    global_start_base: usize,
-) -> Vec<VisualLineRef> {
-    let mut visual = Vec::new();
-    let mut global_base = global_start_base;
-    let mut global_row = 0;
-    let mut current_y = Pixels::ZERO;
-
-    for line in lines {
-        let mut boundaries = line
-            .wrap_boundaries()
-            .iter()
-            .map(|boundary| {
-                let run = &line.runs()[boundary.run_ix];
-                run.glyphs[boundary.glyph_ix].index
-            })
-            .collect::<Vec<_>>();
-        boundaries.push(line.len());
-
-        let mut local_start = 0;
-        for (local_row, local_end) in boundaries.into_iter().enumerate() {
-            visual.push(VisualLineRef {
-                global_start: global_base + local_start,
-                global_end: global_base + local_end,
-                rendered_local_start: local_start,
-                wrapped_line_start: local_start,
-                local_row,
-                global_row,
-                y_offset: current_y,
-                line_height,
-                block_index,
-                line: line.clone(),
-            });
-            local_start = local_end;
-            global_row += 1;
-            current_y += line_height;
-        }
-
-        global_base += line.text.len() + 1;
-    }
-
-    visual
-}
-
-pub fn visual_line_ranges(lines: &[WrappedLine], line_height: Pixels) -> Vec<WrappedVisualLine> {
-    collect_visual_lines(lines, line_height, 0, 0)
-        .into_iter()
-        .map(|line| WrappedVisualLine {
-            start: line.global_start,
-            end: line.global_end,
-            row: line.global_row,
-        })
-        .collect()
-}
-
-fn find_visual_line(lines: &[WrappedVisualLine], offset: usize) -> Option<usize> {
-    lines
-        .iter()
-        .position(|line| offset >= line.start && offset <= line.end)
-}
-
-fn find_visual_line_ref(lines: &[VisualLineRef], offset: usize) -> Option<usize> {
-    lines
-        .iter()
-        .position(|line| offset >= line.global_start && offset <= line.global_end)
-}
-
-fn shift_visual_row(current_row: usize, delta: isize, total_rows: usize) -> Option<usize> {
-    let target = current_row.checked_add_signed(delta)?;
-    (target < total_rows).then_some(target)
 }
 
 pub struct FocusedEditorElement {
@@ -601,11 +412,16 @@ impl Element for FocusedEditorElement {
                     let overlap_end = end.min(line.global_end);
 
                     if overlap_start < overlap_end {
-                        // Very rough approximation for selection rectangles for now.
-                        // A true implementation needs to map global back to local for x_for_index.
+                        let block = &self.blocks[line.block_index];
+                        let rendered_start = block.source_to_rendered(overlap_start - block.global_start);
+                        let rendered_end = block.source_to_rendered(overlap_end - block.global_start);
+                        
+                        let x_start = line.wrapped_line.position_for_index(rendered_start, line.bounds.size.height).map(|p| p.x).unwrap_or(Pixels::ZERO);
+                        let x_end = line.wrapped_line.position_for_index(rendered_end, line.bounds.size.height).map(|p| p.x).unwrap_or(line.bounds.size.width);
+
                         let rect = Bounds {
-                            origin: text_bounds.origin + line.bounds.origin,
-                            size: line.bounds.size,
+                            origin: text_bounds.origin + line.bounds.origin + Point { x: x_start, y: Pixels::ZERO },
+                            size: gpui::size(x_end - x_start, line.bounds.size.height),
                         };
                         window.paint_quad(gpui::fill(rect, self.selection_color));
                     }
@@ -649,8 +465,12 @@ impl Element for FocusedEditorElement {
             if self.cursor_visible {
                 for line in &visual_doc.lines {
                     if cursor.head >= line.global_start && cursor.head <= line.global_end {
+                        let block = &self.blocks[line.block_index];
+                        let rendered_head = block.source_to_rendered(cursor.head - block.global_start);
+                        let x = line.wrapped_line.position_for_index(rendered_head, line.bounds.size.height).map(|p| p.x).unwrap_or(Pixels::ZERO);
+
                         let caret_bounds = Bounds {
-                            origin: text_bounds.origin + line.bounds.origin, // Simplified x pos
+                            origin: text_bounds.origin + line.bounds.origin + Point { x, y: Pixels::ZERO },
                             size: gpui::size(self.style.caret_width, line.bounds.size.height),
                         };
                         window.paint_quad(gpui::fill(caret_bounds, self.cursor_color));
@@ -694,35 +514,6 @@ mod tests {
     }
 
     #[test]
-    fn shift_visual_row_respects_bounds() {
-        assert_eq!(shift_visual_row(1, 1, 3), Some(2));
-        assert_eq!(shift_visual_row(1, -1, 3), Some(0));
-        assert_eq!(shift_visual_row(0, -1, 3), None);
-        assert_eq!(shift_visual_row(2, 1, 3), None);
-    }
-
-    #[test]
-    fn visual_line_edge_offset_returns_current_visual_line_edges() {
-        let lines = vec![
-            WrappedVisualLine {
-                start: 0,
-                end: 10,
-                row: 0,
-            },
-            WrappedVisualLine {
-                start: 11,
-                end: 14,
-                row: 1,
-            },
-        ];
-
-        assert_eq!(visual_line_edge_offset(&lines, 3, false), Some(0));
-        assert_eq!(visual_line_edge_offset(&lines, 3, true), Some(10));
-        assert_eq!(visual_line_edge_offset(&lines, 11, false), Some(11));
-        assert_eq!(visual_line_edge_offset(&lines, 11, true), Some(14));
-    }
-
-    #[test]
     fn test_editor_block_generation() {
         let doc = DocumentModel::from_markdown("# H1\n\nText");
         let theme = Theme::sola_dark();
@@ -750,7 +541,6 @@ mod tests {
             font_size: gpui::px(14.0),
             line_height: gpui::px(20.0),
             global_start: 0,
-            source_len: 4,
             is_focused: true,
             kind: BlockKind::Heading { level: 1 },
             inline_math: vec![],
@@ -765,7 +555,6 @@ mod tests {
             font_size: gpui::px(14.0),
             line_height: gpui::px(20.0),
             global_start: 0,
-            source_len: 20,
             is_focused: false,
             kind: BlockKind::Paragraph,
             inline_math: vec![InlineDecoration {

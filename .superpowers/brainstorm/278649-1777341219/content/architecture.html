@@ -1,0 +1,69 @@
+<h2>Unified Editor Architecture (Approach A)</h2>
+<p class="subtitle">Moving from a list of separate DIVs to a single, high-performance text canvas</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">The Old Way: "Div Soup"</div>
+    <div class="mockup-body">
+      <div style="padding: 10px; opacity: 0.7;">
+        <div style="border: 1px dashed #666; padding: 5px; margin-bottom: 5px;">Block 1: Heading</div>
+        <div style="border: 1px dashed #666; padding: 5px; margin-bottom: 5px;">Block 2: Paragraph</div>
+        <div style="border: 1px dashed #666; padding: 5px; margin-bottom: 5px; background: #333;">Block 3: Focused Paragraph [Cursor]</div>
+        <div style="border: 1px dashed #666; padding: 5px;">Block 4: List</div>
+      </div>
+      <p style="font-size: 0.8em; color: #888; text-align: center; margin-top: 10px;">Selection breaks at block boundaries.<br>Layout is rigid and fragmented.</p>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">The New Way: Unified Canvas</div>
+    <div class="mockup-body" style="background: #1a1a1a;">
+      <div style="padding: 20px; color: #ccc; position: relative;">
+        <div style="color: #66d9ef; font-size: 1.5em; font-weight: bold; margin-bottom: 15px;"># Unified Editor Architecture</div>
+        <div style="margin-bottom: 10px;">This is a <span style="background: rgba(74, 144, 226, 0.3); border-left: 2px solid #4a90e2;">continuous selection</span> that can span across what used to be separate blocks.</div>
+        <div style="font-family: 'JetBrains Mono', monospace; background: #2a2a2a; padding: 5px; color: #f8f8f2;">
+          > *You are editing this block in source mode...* |
+        </div>
+        <div style="margin-top: 15px; color: #888; font-style: italic;">Seamless rendering of math: <span style="color: #4a90e2;">$$\int f(x)dx$$</span></div>
+      </div>
+      <p style="font-size: 0.8em; color: #888; text-align: center; margin-top: 10px;">Global coordinate system.<br>Pixel-perfect selection and smooth scrolling.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Core Architectural Components</h3>
+  <div class="cards">
+    <div class="card">
+      <div class="card-body">
+        <label class="label">Component 1</label>
+        <h4>Dynamic Run Generator</h4>
+        <p>Converts the AST into a stream of <code>TextRun</code>s. If the global cursor is within a block, it emits "Source" runs (syntax highlighted). Otherwise, it emits "Rich" runs (styled headers, hidden markers).</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <label class="label">Component 2</label>
+        <h4>Global Offset Mapping</h4>
+        <p>All interactions (clicks, keypresses) operate on a single document-wide UTF-8 byte offset. No more "block local" coordinates causing selection gaps.</p>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-body">
+        <label class="label">Component 3</label>
+        <h4>Object Replacement (U+FFFC)</h4>
+        <p>Inline Math and Typst blocks are treated as "objects" within the text flow. We reserve space in the layout and paint the SVG directly over the text canvas.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="options">
+  <div class="option" data-choice="approve" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content">
+      <h3>Approve Architecture</h3>
+      <p>Looks solid, let's proceed to the data flow and implementation plan.</p>
+    </div>
+  </div>
+</div>
