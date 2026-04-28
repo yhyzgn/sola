@@ -1393,7 +1393,6 @@ impl SolaRoot {
             font_size: style.font_size,
             line_height: style.line_height,
             global_start: 0,
-            source_len: text.len(),
             is_focused: true,
             kind: BlockKind::Paragraph,
             inline_math: Vec::new(),
