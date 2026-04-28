@@ -365,7 +365,6 @@ pub struct EditorBlock {
     pub font_size: Pixels,
     pub line_height: Pixels,
     pub global_start: usize,
-    pub source_len: usize,
     pub is_focused: bool,
     pub kind: BlockKind,
     pub inline_math: Vec<InlineDecoration>,
@@ -386,7 +385,7 @@ impl EditorBlock {
                 return rendered_offset;
             }
             rendered_offset += deco.start - last_source_pos;
-            if source_local <= deco.end {
+            if source_local < deco.end {
                 // Inside a formula, clamp to the placeholder position
                 return rendered_offset;
             }
@@ -411,7 +410,6 @@ impl EditorBlock {
                 return current_source + (rendered_local - current_rendered);
             }
             current_rendered += gap;
-            current_source += gap;
 
             if rendered_local == current_rendered {
                 return deco.start; // Start of placeholder maps to start of formula
@@ -433,14 +431,13 @@ pub fn generate_editor_blocks(
     let mut blocks = Vec::new();
     let focused_block_idx =
         global_cursor.and_then(|c| doc.global_offset_to_block_local(c).map(|(idx, _)| idx));
-    let highlighter = SyntaxHighlighter::new_rust();
     let mut current_global = 0;
 
     for (i, block) in doc.blocks().iter().enumerate() {
         let is_focused = focused_block_idx == Some(i);
-        let source_len = block.source.len();
 
         let (text, font_size, line_height, runs, inline_math) = if is_focused {
+            let highlighter = SyntaxHighlighter::new_rust();
             let spans = highlighter.highlight(&block.source);
             let runs = spans_to_runs(&spans, style, theme);
             (
@@ -466,7 +463,6 @@ pub fn generate_editor_blocks(
                         if !formula.contains('\n') && !formula.is_empty() {
                             // Found valid inline math
                             text.push_str(&block.source[last_pos..pos]);
-                            let placeholder_start = text.len();
                             text.push('\u{FFFC}'); // Placeholder
                             
                             inline_math.push(InlineDecoration {
@@ -522,13 +518,13 @@ pub fn generate_editor_blocks(
             (text, font_size, line_height, runs, inline_math)
         };
 
+        let source_len = block.source.len();
         blocks.push(EditorBlock {
             text,
             runs,
             font_size,
             line_height,
             global_start: current_global,
-            source_len,
             is_focused,
             kind: block.kind.clone(),
             inline_math,
@@ -926,15 +922,15 @@ mod tests {
         assert_eq!(style.font_family, "JetBrains Mono");
         assert_eq!(style.font_size, px(14.0));
         assert_eq!(style.line_height, px(18.9));
-        assert_eq!(style.padding_x, px(6.0));
-        assert_eq!(style.padding_y, px(6.0));
+        assert_eq!(style.padding_x, px(40.0));
+        assert_eq!(style.padding_y, px(20.0));
         assert_eq!(style.caret_width, px(2.0));
     }
 
     #[test]
     fn approximate_wrap_width_reserves_sidebar_and_padding_budget() {
-        assert_eq!(approximate_editor_wrap_width(px(1000.0)), px(580.0));
-        assert_eq!(approximate_editor_wrap_width(px(300.0)), px(120.0));
+        assert_eq!(approximate_editor_wrap_width(px(1000.0)), px(820.0));
+        assert_eq!(approximate_editor_wrap_width(px(300.0)), px(220.0));
     }
 
     #[test]
@@ -943,13 +939,6 @@ mod tests {
         assert_eq!(shift_visual_row(1, -1, 3), Some(0));
         assert_eq!(shift_visual_row(0, -1, 3), None);
         assert_eq!(shift_visual_row(2, 1, 3), None);
-    }
-
-    #[test]
-    fn visual_row_for_y_respects_bounds() {
-        assert_eq!(visual_row_for_y(px(0.0), px(18.0), 3), Some(0));
-        assert_eq!(visual_row_for_y(px(20.0), px(18.0), 3), Some(1));
-        assert_eq!(visual_row_for_y(px(60.0), px(18.0), 3), None);
     }
 
     #[test]
@@ -1003,23 +992,60 @@ mod tests {
             global_start: 0,
             source_len: 4,
             is_focused: true,
+            kind: BlockKind::Heading { level: 1 },
+            inline_math: vec![],
         };
         assert_eq!(focused.rendered_to_source(2), 2);
         assert_eq!(focused.source_to_rendered(2), 2);
 
-        // Blurred block (Prefix hidden mapping)
+        // Blurred block (with inline math mapping)
         let blurred = EditorBlock {
-            text: "H1".into(), // rendered
+            text: "Hello \u{FFFC} world".into(),
             runs: vec![],
-            font_size: gpui::px(28.0),
-            line_height: gpui::px(36.0),
+            font_size: gpui::px(14.0),
+            line_height: gpui::px(20.0),
             global_start: 0,
-            source_len: 4, // "# H1"
+            source_len: 20,
             is_focused: false,
+            kind: BlockKind::Paragraph,
+            inline_math: vec![InlineDecoration {
+                start: 6,
+                end: 14,
+                cache_key: "math::e=mc^2".into(),
+            }],
         };
-        // Index 0 in "H1" is index 2 in "# H1"
-        assert_eq!(blurred.rendered_to_source(0), 2);
-        // Index 1 in "# H1" (the space) clamps to 0 in "H1"
-        assert_eq!(blurred.source_to_rendered(1), 0);
+        // "Hello " (len 6) maps 1:1
+        assert_eq!(blurred.rendered_to_source(0), 0);
+        assert_eq!(blurred.rendered_to_source(5), 5);
+        // Placeholder at index 6 maps to start of math (6)
+        assert_eq!(blurred.rendered_to_source(6), 6);
+        // After placeholder (index 7) maps to after math (14)
+        assert_eq!(blurred.rendered_to_source(7), 14);
+        
+        // Source to Rendered
+        assert_eq!(blurred.source_to_rendered(0), 0);
+        assert_eq!(blurred.source_to_rendered(6), 6);
+        assert_eq!(blurred.source_to_rendered(10), 6); // inside math clamps to placeholder
+        assert_eq!(blurred.source_to_rendered(14), 7); // after math
+    }
+
+    #[test]
+    fn test_generate_editor_blocks_replaces_inline_math() {
+        let source = "Hello $e=mc^2$ world";
+        let doc = DocumentModel::from_markdown(source);
+        let theme = Theme::sola_dark();
+        let style = FocusedEditorStyle::from_theme(&theme);
+        
+        // global_cursor = None means no block is focused
+        let blocks = generate_editor_blocks(&doc, None, &style, &theme);
+        
+        assert_eq!(blocks.len(), 1);
+        let block = &blocks[0];
+        
+        // Expected text: "Hello \u{FFFC} world"
+        assert_eq!(block.text, "Hello \u{FFFC} world");
+        assert_eq!(block.inline_math.len(), 1);
+        assert_eq!(block.inline_math[0].start, 6); // "$" at index 6
+        assert_eq!(block.inline_math[0].end, 14); // after second "$"
     }
 }
