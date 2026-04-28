@@ -5633,6 +5633,7 @@ dependencies = [
  "gpui",
  "ignore",
  "notify",
+ "pulldown-cmark",
  "serde",
  "serde_json",
  "sola-core",

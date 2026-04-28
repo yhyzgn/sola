@@ -15,6 +15,7 @@ ignore = "0.4.25"
 notify = "8.2.0"
 serde = { workspace = true, features = ["derive"] }
 serde_json = "1.0.149"
+pulldown-cmark.workspace = true
 sola-core = { path = "../sola-core" }
 sola-document = { path = "../sola-document" }
 sola-export = { path = "../sola-export" }

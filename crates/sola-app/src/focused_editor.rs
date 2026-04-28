@@ -81,15 +81,9 @@ impl FocusedEditorStyle {
 }
 
 pub fn approximate_editor_wrap_width(available_width: Pixels) -> Pixels {
-    // We target a 900px centered container with 40px padding on each side.
-    // So the actual text wrap width should never exceed 900 - 80 = 820px.
-    let max_text_width = px(820.0);
-    let width = available_width - px(80.0); // Account for padding
-    
-    if width > max_text_width {
-        max_text_width
-    } else if width > px(120.0) {
-        width
+    let padding = px(80.0);
+    if available_width > padding {
+        available_width - padding
     } else {
         px(120.0)
     }
@@ -103,6 +97,8 @@ pub struct FocusedEditorElement {
     cursor_visible: bool,
     selection_color: Hsla,
     cursor_color: Hsla,
+    accent_color: Hsla,
+    code_bg_color: Hsla,
     on_cursor_move: Option<Arc<dyn Fn(usize, bool, &mut Window, &mut App) + Send + Sync>>,
 }
 
@@ -115,6 +111,8 @@ impl FocusedEditorElement {
         cursor_visible: bool,
         selection_color: Hsla,
         cursor_color: Hsla,
+        accent_color: Hsla,
+        code_bg_color: Hsla,
     ) -> Self {
         Self {
             blocks,
@@ -124,6 +122,8 @@ impl FocusedEditorElement {
             cursor_visible,
             selection_color,
             cursor_color,
+            accent_color,
+            code_bg_color,
             on_cursor_move: None,
         }
     }
@@ -144,13 +144,23 @@ pub struct InlineDecoration {
     pub cache_key: String,
 }
 
+use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+
+#[derive(Clone, Debug)]
+pub struct MappingSegment {
+    pub rendered_start: usize,
+    pub source_start: usize,
+}
+
 #[derive(Clone)]
 pub struct EditorBlock {
     pub text: String,
     pub runs: Vec<TextRun>,
     pub font_size: Pixels,
     pub line_height: Pixels,
+    pub indentation: Pixels,
     pub global_start: usize,
+    pub mapping: Vec<MappingSegment>,
     pub is_focused: bool,
     pub kind: BlockKind,
     pub inline_math: Vec<InlineDecoration>,
@@ -158,53 +168,61 @@ pub struct EditorBlock {
 
 impl EditorBlock {
     pub fn source_to_rendered(&self, source_local: usize) -> usize {
-        if self.is_focused || self.inline_math.is_empty() {
+        if self.is_focused {
             return source_local;
         }
 
-        let mut rendered_offset = 0;
-        let mut last_source_pos = 0;
-
+        // Check if we are inside an inline math decoration
         for deco in &self.inline_math {
-            if source_local < deco.start {
-                rendered_offset += source_local - last_source_pos;
-                return rendered_offset;
+            if source_local >= deco.start && source_local < deco.end {
+                // Find the mapping segment for this math block
+                for segment in &self.mapping {
+                    if segment.source_start == deco.start {
+                        return segment.rendered_start;
+                    }
+                }
             }
-            rendered_offset += deco.start - last_source_pos;
-            if source_local < deco.end {
-                // Inside a formula, clamp to the placeholder position
-                return rendered_offset;
-            }
-            rendered_offset += 1; // The placeholder \u{FFFC}
-            last_source_pos = deco.end;
         }
 
-        rendered_offset + (source_local - last_source_pos)
+        // Find the segment that contains this source offset
+        let mut best_segment = None;
+        for segment in &self.mapping {
+            if segment.source_start <= source_local {
+                best_segment = Some(segment);
+            } else {
+                break;
+            }
+        }
+
+        if let Some(segment) = best_segment {
+            let offset_in_segment = source_local - segment.source_start;
+            segment.rendered_start + offset_in_segment
+        } else {
+            0
+        }
     }
 
     pub fn rendered_to_source(&self, rendered_local: usize) -> usize {
-        if self.is_focused || self.inline_math.is_empty() {
+        if self.is_focused {
             return rendered_local;
         }
 
-        let mut current_rendered = 0;
-        let mut current_source = 0;
-
-        for deco in &self.inline_math {
-            let gap = deco.start - current_source;
-            if rendered_local < current_rendered + gap {
-                return current_source + (rendered_local - current_rendered);
+        // Find the segment that contains this rendered offset
+        let mut best_segment = None;
+        for segment in &self.mapping {
+            if segment.rendered_start <= rendered_local {
+                best_segment = Some(segment);
+            } else {
+                break;
             }
-            current_rendered += gap;
-
-            if rendered_local == current_rendered {
-                return deco.start; // Start of placeholder maps to start of formula
-            }
-            current_rendered += 1;
-            current_source = deco.end;
         }
 
-        current_source + (rendered_local - current_rendered)
+        if let Some(segment) = best_segment {
+            let offset_in_segment = rendered_local - segment.rendered_start;
+            segment.source_start + offset_in_segment
+        } else {
+            0
+        }
     }
 }
 
@@ -222,7 +240,7 @@ pub fn generate_editor_blocks(
     for (i, block) in doc.blocks().iter().enumerate() {
         let is_focused = focused_block_idx == Some(i);
 
-        let (text, font_size, line_height, runs, inline_math) = if is_focused {
+        let (text, font_size, line_height, runs, inline_math, mapping) = if is_focused {
             let highlighter = SyntaxHighlighter::new_rust();
             let spans = highlighter.highlight(&block.source);
             let runs = spans_to_runs(&spans, style, theme);
@@ -232,76 +250,15 @@ pub fn generate_editor_blocks(
                 style.line_height,
                 runs,
                 Vec::new(),
+                Vec::new(),
             )
         } else {
-            let mut text = String::new();
-            let mut inline_math = Vec::new();
-            let mut last_pos = 0;
+            generate_rich_text(&block.source, &block.kind, theme)
+        };
 
-            // Simple scanner for $...$
-            let bytes = block.source.as_bytes();
-            let mut pos = 0;
-            while pos < bytes.len() {
-                if bytes[pos] == b'$' && (pos == 0 || bytes[pos - 1] != b'\\') {
-                    if let Some(end_rel) = block.source[pos + 1..].find('$') {
-                        let end = pos + 1 + end_rel;
-                        let formula = &block.source[pos + 1..end];
-                        if !formula.contains('\n') && !formula.is_empty() {
-                            // Found valid inline math
-                            text.push_str(&block.source[last_pos..pos]);
-                            text.push('\u{FFFC}'); // Placeholder
-                            
-                            inline_math.push(InlineDecoration {
-                                start: pos,
-                                end: end + 1,
-                                cache_key: format!("math::{}", formula),
-                            });
-                            
-                            pos = end + 1;
-                            last_pos = pos;
-                            continue;
-                        }
-                    }
-                }
-                pos += 1;
-            }
-            text.push_str(&block.source[last_pos..]);
-
-            // Styling
-            let (size_mult, weight, color) = match &block.kind {
-                BlockKind::Heading { level: 1 } => {
-                    (2.0, FontWeight::BOLD, &theme.palette.text_primary)
-                }
-                BlockKind::Heading { level: 2 } => {
-                    (1.5, FontWeight::BOLD, &theme.palette.text_primary)
-                }
-                BlockKind::Heading { level: 3 } => {
-                    (1.25, FontWeight::BOLD, &theme.palette.text_primary)
-                }
-                BlockKind::Heading { .. } => (1.1, FontWeight::BOLD, &theme.palette.text_primary),
-                BlockKind::Quote => (1.0, FontWeight::NORMAL, &theme.palette.text_muted),
-                _ => (1.0, FontWeight::NORMAL, &theme.palette.text_primary),
-            };
-
-            let base_size = theme.typography.body_size as f32;
-            let font_size = px(base_size * size_mult);
-            let line_height = font_size * 1.5;
-
-            let runs = vec![TextRun {
-                len: text.len(),
-                font: Font {
-                    family: "System UI".into(),
-                    features: FontFeatures::default(),
-                    fallbacks: None,
-                    weight,
-                    style: FontStyle::default(),
-                },
-                color: rgb_hex(color),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            }];
-            (text, font_size, line_height, runs, inline_math)
+        let indentation = match &block.kind {
+            BlockKind::ListItem { .. } | BlockKind::Quote => px(24.0),
+            _ => px(0.0),
         };
 
         let source_len = block.source.len();
@@ -310,7 +267,9 @@ pub fn generate_editor_blocks(
             runs,
             font_size,
             line_height,
+            indentation,
             global_start: current_global,
+            mapping,
             is_focused,
             kind: block.kind.clone(),
             inline_math,
@@ -320,6 +279,257 @@ pub fn generate_editor_blocks(
     }
 
     blocks
+}
+
+fn generate_rich_text(
+    source: &str,
+    kind: &BlockKind,
+    theme: &Theme,
+) -> (String, Pixels, Pixels, Vec<TextRun>, Vec<InlineDecoration>, Vec<MappingSegment>) {
+    let mut text = String::new();
+    let mut runs = Vec::new();
+    let mut inline_math = Vec::new();
+    let mut mapping = Vec::new();
+
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    options.insert(Options::ENABLE_TASKLISTS);
+    options.insert(Options::ENABLE_MATH);
+    let parser = Parser::new_ext(source, options).into_offset_iter();
+
+    let mut current_weight;
+    let mut current_style = FontStyle::default();
+    let current_font_family: String = "System UI".into();
+    let mut current_color = rgb_hex(&theme.palette.text_primary);
+    let mut is_strikethrough = false;
+    let mut is_link = false;
+    let mut is_blockquote = false;
+    let mut list_index = 0;
+
+    // Heading base styles
+    let (size_mult, base_weight) = match kind {
+        BlockKind::Heading { level: 1 } => (2.0, FontWeight::BOLD),
+        BlockKind::Heading { level: 2 } => (1.5, FontWeight::BOLD),
+        BlockKind::Heading { level: 3 } => (1.25, FontWeight::BOLD),
+        BlockKind::Heading { .. } => (1.1, FontWeight::BOLD),
+        BlockKind::Quote => {
+            is_blockquote = true;
+            (1.0, FontWeight::NORMAL)
+        }
+        _ => (1.0, FontWeight::NORMAL),
+    };
+    current_weight = base_weight;
+    if is_blockquote {
+        current_color = rgb_hex(&theme.palette.text_muted);
+    }
+
+    let base_size = theme.typography.body_size as f32;
+    let font_size = px(base_size * size_mult);
+    let line_height = font_size * 1.5;
+
+    for (event, range) in parser {
+        match event {
+            Event::Start(Tag::Strong) => current_weight = FontWeight::BOLD,
+            Event::End(TagEnd::Strong) => current_weight = base_weight,
+            Event::Start(Tag::Emphasis) => current_style = FontStyle::Italic,
+            Event::End(TagEnd::Emphasis) => current_style = FontStyle::Normal,
+            Event::Start(Tag::Strikethrough) => is_strikethrough = true,
+            Event::End(TagEnd::Strikethrough) => is_strikethrough = false,
+            Event::Start(Tag::Link { .. }) => is_link = true,
+            Event::End(TagEnd::Link) => is_link = false,
+            Event::Start(Tag::Image { alt, .. }) => {
+                mapping.push(MappingSegment {
+                    rendered_start: text.len(),
+                    source_start: range.start,
+                });
+                let label = format!("[Image: {}]", alt);
+                text.push_str(&label);
+                runs.push(TextRun {
+                    len: label.len(),
+                    font: Font {
+                        family: current_font_family.clone().into(),
+                        features: FontFeatures::default(),
+                        fallbacks: None,
+                        weight: FontWeight::BOLD,
+                        style: FontStyle::default(),
+                    },
+                    color: rgb_hex(&theme.palette.accent),
+                    background_color: Some(rgb_hex(&theme.palette.code_background)),
+                    underline: None,
+                    strikethrough: None,
+                });
+            }
+            Event::End(TagEnd::Image) => {}
+            Event::TaskListMarker(checked) => {
+                let marker = if checked { "☑ " } else { "☐ " };
+                mapping.push(MappingSegment {
+                    rendered_start: text.len(),
+                    source_start: range.start,
+                });
+                text.push_str(marker);
+                runs.push(TextRun {
+                    len: marker.len(),
+                    font: Font {
+                        family: current_font_family.clone().into(),
+                        features: FontFeatures::default(),
+                        fallbacks: None,
+                        weight: current_weight,
+                        style: current_style,
+                    },
+                    color: rgb_hex(&theme.palette.accent),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                });
+            }
+            Event::InlineMath(t) => {
+                mapping.push(MappingSegment {
+                    rendered_start: text.len(),
+                    source_start: range.start,
+                });
+                
+                inline_math.push(InlineDecoration {
+                    start: range.start,
+                    end: range.end,
+                    cache_key: format!("math::{}", t),
+                });
+                
+                text.push('\u{FFFC}');
+                runs.push(TextRun {
+                    len: '\u{FFFC}'.len_utf8(),
+                    font: Font {
+                        family: current_font_family.clone().into(),
+                        features: FontFeatures::default(),
+                        fallbacks: None,
+                        weight: current_weight,
+                        style: current_style,
+                    },
+                    color: current_color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                });
+            }
+            Event::Start(Tag::Item) => {
+                mapping.push(MappingSegment {
+                    rendered_start: text.len(),
+                    source_start: range.start,
+                });
+                match kind {
+                    BlockKind::ListItem { ordered: true } => {
+                        list_index += 1;
+                        text.push_str(&format!("{}. ", list_index));
+                    }
+                    _ => text.push_str("• "),
+                }
+                let prefix_len = if matches!(kind, BlockKind::ListItem { ordered: true }) {
+                    format!("{}. ", list_index).len()
+                } else {
+                    "• ".len()
+                };
+                runs.push(TextRun {
+                    len: prefix_len,
+                    font: Font {
+                        family: current_font_family.clone().into(),
+                        features: FontFeatures::default(),
+                        fallbacks: None,
+                        weight: current_weight,
+                        style: current_style,
+                    },
+                    color: rgb_hex(&theme.palette.accent),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                });
+            }
+            Event::Code(c) => {
+                mapping.push(MappingSegment {
+                    rendered_start: text.len(),
+                    source_start: range.start,
+                });
+                text.push_str(&c);
+                runs.push(TextRun {
+                    len: c.len(),
+                    font: Font {
+                        family: "JetBrains Mono".into(),
+                        features: FontFeatures::default(),
+                        fallbacks: None,
+                        weight: current_weight,
+                        style: current_style,
+                    },
+                    color: rgb_hex(&theme.syntax.string),
+                    background_color: Some(rgb_hex(&theme.palette.code_background)),
+                    underline: None,
+                    strikethrough: is_strikethrough.then_some(gpui::StrikethroughStyle::default()),
+                });
+            }
+            Event::Text(t) => {
+                mapping.push(MappingSegment {
+                    rendered_start: text.len(),
+                    source_start: range.start,
+                });
+                
+                text.push_str(&t);
+                runs.push(TextRun {
+                    len: t.len(),
+                    font: Font {
+                        family: current_font_family.clone().into(),
+                        features: FontFeatures::default(),
+                        fallbacks: None,
+                        weight: current_weight,
+                        style: current_style,
+                    },
+                    color: if is_link { rgb_hex(&theme.palette.accent) } else { current_color },
+                    background_color: None,
+                    underline: is_link.then_some(gpui::UnderlineStyle::default()),
+                    strikethrough: is_strikethrough.then_some(gpui::StrikethroughStyle::default()),
+                });
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                text.push(' ');
+                runs.push(TextRun {
+                    len: 1,
+                    font: Font {
+                        family: current_font_family.clone().into(),
+                        features: FontFeatures::default(),
+                        fallbacks: None,
+                        weight: current_weight,
+                        style: current_style,
+                    },
+                    color: current_color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    // If text is empty (e.g. empty block), add a dummy run
+    if text.is_empty() {
+        text.push(' ');
+        runs.push(TextRun {
+            len: 1,
+            font: Font {
+                family: current_font_family.into(),
+                features: FontFeatures::default(),
+                fallbacks: None,
+                weight: current_weight,
+                style: current_style,
+            },
+            color: current_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+        mapping.push(MappingSegment {
+            rendered_start: 0,
+            source_start: 0,
+        });
+    }
+
+    (text, font_size, line_height, runs, inline_math, mapping)
 }
 
 pub struct FocusedEditorState {
@@ -345,7 +555,8 @@ impl Element for FocusedEditorElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let wrap_width = approximate_editor_wrap_width(window.bounds().size.width);
+        let available_width = window.bounds().size.width.min(px(900.0));
+        let wrap_width = approximate_editor_wrap_width(available_width);
 
         let visual_doc = layout_document(window, &self.blocks, wrap_width);
 
@@ -431,6 +642,30 @@ impl Element for FocusedEditorElement {
 
         // 2. Paint Text and Objects
         for line in &visual_doc.lines {
+            let block = &self.blocks[line.block_index];
+
+            // Paint block-level decorations
+            if !block.is_focused {
+                match &block.kind {
+                    BlockKind::Quote => {
+                        let bar_width = px(4.0);
+                        let bar_rect = Bounds {
+                            origin: text_bounds.origin + Point { x: px(0.0), y: line.bounds.origin.y },
+                            size: gpui::size(bar_width, line.bounds.size.height),
+                        };
+                        window.paint_quad(gpui::fill(bar_rect, self.accent_color));
+                    }
+                    BlockKind::CodeFence { .. } | BlockKind::MathBlock | BlockKind::TypstBlock => {
+                        let bg_rect = Bounds {
+                            origin: text_bounds.origin + line.bounds.origin,
+                            size: line.bounds.size,
+                        };
+                        window.paint_quad(gpui::fill(bg_rect, self.code_bg_color));
+                    }
+                    _ => {}
+                }
+            }
+
             // Paint text
             let _ = line.wrapped_line.paint(
                 text_bounds.origin + line.bounds.origin,
@@ -509,7 +744,7 @@ mod tests {
 
     #[test]
     fn approximate_wrap_width_reserves_sidebar_and_padding_budget() {
-        assert_eq!(approximate_editor_wrap_width(px(1000.0)), px(820.0));
+        assert_eq!(approximate_editor_wrap_width(px(1000.0)), px(920.0));
         assert_eq!(approximate_editor_wrap_width(px(300.0)), px(220.0));
     }
 
@@ -540,7 +775,9 @@ mod tests {
             runs: vec![],
             font_size: gpui::px(14.0),
             line_height: gpui::px(20.0),
+            indentation: gpui::px(0.0),
             global_start: 0,
+            mapping: vec![],
             is_focused: true,
             kind: BlockKind::Heading { level: 1 },
             inline_math: vec![],
@@ -554,7 +791,13 @@ mod tests {
             runs: vec![],
             font_size: gpui::px(14.0),
             line_height: gpui::px(20.0),
+            indentation: gpui::px(0.0),
             global_start: 0,
+            mapping: vec![
+                MappingSegment { rendered_start: 0, source_start: 0 },
+                MappingSegment { rendered_start: 6, source_start: 6 },
+                MappingSegment { rendered_start: 7, source_start: 14 },
+            ],
             is_focused: false,
             kind: BlockKind::Paragraph,
             inline_math: vec![InlineDecoration {

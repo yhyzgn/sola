@@ -991,6 +991,8 @@ impl SolaRoot {
 
         let selection_color = rgb_hex(&theme.palette.selection);
         let cursor_color = rgb_hex(&theme.palette.cursor);
+        let accent_color = rgb_hex(&theme.palette.accent);
+        let code_bg_color = rgb_hex(&theme.palette.code_background);
         let on_cursor_handle = self.this_handle.clone();
         let focus_handle = self.focus_handle.clone();
 
@@ -1005,6 +1007,8 @@ impl SolaRoot {
             self.cursor_visible,
             selection_color,
             cursor_color,
+            accent_color,
+            code_bg_color,
         )
         .on_cursor_move(move |global_offset, shift, window, cx| {
             if let Some(this_handle) = &on_cursor_handle {
@@ -1054,10 +1058,10 @@ impl SolaRoot {
                         div()
                             .flex()
                             .flex_col()
-                            .flex_1()
-                            .py(px(32.0))
+                            .w_full()
                             .max_w(px(900.0))
                             .mx_auto()
+                            .py(px(32.0))
                             .child(editor_element),
                     ),
             )

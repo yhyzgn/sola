@@ -45,13 +45,14 @@ pub fn layout_document(
     let mut current_y = Pixels::ZERO;
 
     for (block_index, block) in blocks.iter().enumerate() {
+        let block_wrap_width = wrap_width - block.indentation;
         let lines = window
             .text_system()
             .shape_text(
                 SharedString::from(block.text.clone()),
                 block.font_size,
                 &block.runs,
-                Some(wrap_width),
+                Some(block_wrap_width),
                 None,
             )
             .unwrap_or_default()
@@ -77,8 +78,8 @@ pub fn layout_document(
                 let global_end = block.global_start + block.rendered_to_source(text_end);
 
                 let bounds = Bounds {
-                    origin: Point { x: Pixels::ZERO, y: current_y },
-                    size: size(wrap_width, line_height),
+                    origin: Point { x: block.indentation, y: current_y },
+                    size: size(block_wrap_width, line_height),
                 };
 
                 // Find objects in this visual line
