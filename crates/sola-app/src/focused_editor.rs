@@ -1,12 +1,12 @@
 use gpui::{
-    App, Bounds, DispatchPhase, Element, ElementId, Font, FontFeatures, FontStyle, FontWeight,
-    GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, Pixels, Point, SharedString, Style, TextAlign, TextRun, Window, WrappedLine,
-    px, TransformationMatrix,
+    App, Bounds, Element, ElementId, Font, FontFeatures, FontStyle, FontWeight,
+    GlobalElementId, Hsla, InspectorElementId, IntoElement, LayoutId, Pixels, Point, SharedString,
+    Style, TextRun, Window, WrappedLine, px,
 };
 use sola_document::{BlockKind, CursorState, DocumentModel, TypstAdapter};
 use sola_document::highlighter::{HighlightKind, HighlightedSpan, SyntaxHighlighter};
 use sola_theme::{Theme, parse_hex_color};
+use crate::editor_layout::{VisualDocument, layout_document};
 use std::sync::Arc;
 use std::collections::HashMap;
 
@@ -284,31 +284,6 @@ fn shift_visual_row(current_row: usize, delta: isize, total_rows: usize) -> Opti
     (target < total_rows).then_some(target)
 }
 
-pub fn hit_test_visual_offset(
-    visual_lines: &[VisualLineRef],
-    blocks: &[EditorBlock],
-    point: Point<Pixels>,
-) -> Option<usize> {
-    let line = visual_lines
-        .iter()
-        .find(|l| point.y >= l.y_offset && point.y < l.y_offset + l.line_height)?;
-    let local = line
-        .line
-        .closest_index_for_position(
-            Point {
-                x: point.x,
-                y: line.line_height * line.local_row as f32,
-            },
-            line.line_height,
-        )
-        .unwrap_or_else(|index| index);
-
-    let rendered_offset = line.rendered_local_start + local.saturating_sub(line.wrapped_line_start);
-    let block = &blocks[line.block_index];
-
-    Some(block.global_start + block.rendered_to_source(rendered_offset))
-}
-
 pub struct FocusedEditorElement {
     blocks: Vec<EditorBlock>,
     typst_cache: HashMap<String, TypstAdapter>,
@@ -536,69 +511,8 @@ pub fn generate_editor_blocks(
     blocks
 }
 
-pub fn layout_editor_blocks(
-    window: &mut Window,
-    blocks: &[EditorBlock],
-    wrap_width: Pixels,
-) -> Vec<VisualLineRef> {
-    let mut visual_lines = Vec::new();
-    let mut current_y = Pixels::ZERO;
-    let mut global_row = 0;
-
-    for (block_idx, block) in blocks.iter().enumerate() {
-        let lines = window
-            .text_system()
-            .shape_text(
-                SharedString::from(block.text.clone()),
-                block.font_size,
-                &block.runs,
-                Some(wrap_width),
-                None,
-            )
-            .unwrap_or_default()
-            .into_vec();
-
-        let mut block_rendered_base = 0;
-        for line in &lines {
-            let mut boundaries = line
-                .wrap_boundaries()
-                .iter()
-                .map(|b| line.runs()[b.run_ix].glyphs[b.glyph_ix].index)
-                .collect::<Vec<_>>();
-            boundaries.push(line.len());
-
-            let mut local_start = 0;
-            for (local_row, local_end) in boundaries.into_iter().enumerate() {
-                let text_start = block_rendered_base + local_start;
-                let text_end = block_rendered_base + local_end;
-
-                visual_lines.push(VisualLineRef {
-                    global_start: block.global_start + block.rendered_to_source(text_start),
-                    global_end: block.global_start + block.rendered_to_source(text_end),
-                    rendered_local_start: text_start,
-                    wrapped_line_start: local_start,
-                    local_row,
-                    global_row,
-                    y_offset: current_y,
-                    line_height: block.line_height,
-                    block_index: block_idx,
-                    line: line.clone(),
-                });
-                local_start = local_end;
-                global_row += 1;
-                current_y += block.line_height;
-            }
-            block_rendered_base += line.text.len() + 1;
-        }
-        // Block spacing
-        current_y += block.line_height;
-    }
-
-    visual_lines
-}
-
 pub struct FocusedEditorState {
-    visual_lines: Vec<VisualLineRef>,
+    pub(crate) visual_doc: VisualDocument,
 }
 
 impl Element for FocusedEditorElement {
@@ -622,13 +536,10 @@ impl Element for FocusedEditorElement {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let wrap_width = approximate_editor_wrap_width(window.bounds().size.width);
 
-        let visual_lines = layout_editor_blocks(window, &self.blocks, wrap_width);
+        let visual_doc = layout_document(window, &self.blocks, wrap_width);
 
         // Calculate total height to enable scrolling
-        let total_height = visual_lines
-            .last()
-            .map_or(Pixels::ZERO, |l| l.y_offset + l.line_height)
-            + px(100.0); // Add bottom padding
+        let total_height = visual_doc.total_height + px(100.0); // Add bottom padding
 
         let mut style = Style::default();
         style.size.width = gpui::relative(1.0).into();
@@ -638,7 +549,7 @@ impl Element for FocusedEditorElement {
         (
             layout_id,
             FocusedEditorState {
-                visual_lines,
+                visual_doc,
             },
         )
     }
@@ -665,7 +576,7 @@ impl Element for FocusedEditorElement {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let visual_lines = &request_layout_state.visual_lines;
+        let visual_doc = &request_layout_state.visual_doc;
 
         let padding = Point {
             x: self.style.padding_x,
@@ -679,225 +590,74 @@ impl Element for FocusedEditorElement {
             ),
         };
 
-        // 1. Paint Block Decorations (Backgrounds, Border, etc.)
-        for (block_idx, block) in self.blocks.iter().enumerate() {
-            if !block.is_focused {
-                let block_visuals: Vec<_> = visual_lines
-                    .iter()
-                    .filter(|l| l.block_index == block_idx)
-                    .collect();
+        // 1. Paint Selection
+        if let Some(cursor) = &self.cursor {
+            if let Some(anchor) = cursor.anchor {
+                let start = anchor.min(cursor.head);
+                let end = anchor.max(cursor.head);
 
-                if let (Some(first), Some(last)) = (block_visuals.first(), block_visuals.last()) {
-                    match &block.kind {
-                        BlockKind::Quote => {
-                            let quote_bar_bounds = Bounds {
-                                origin: text_bounds.origin
-                                    + Point {
-                                        x: px(-20.0),
-                                        y: first.y_offset,
-                                    },
-                                size: gpui::size(
-                                    px(4.0),
-                                    last.y_offset + last.line_height - first.y_offset,
-                                ),
-                            };
-                            window.paint_quad(gpui::fill(
-                                quote_bar_bounds,
-                                gpui::rgb(0x4a90e2), // Quote bar color
-                            ));
-                        }
-                        BlockKind::CodeFence { .. } | BlockKind::TypstBlock => {
-                            let bg_bounds = Bounds {
-                                origin: text_bounds.origin
-                                    + Point {
-                                        x: px(-10.0),
-                                        y: first.y_offset - px(4.0),
-                                    },
-                                size: gpui::size(
-                                    text_bounds.size.width + px(20.0),
-                                    last.y_offset + last.line_height - first.y_offset + px(8.0),
-                                ),
-                            };
-                            window.paint_quad(gpui::fill(
-                                bg_bounds,
-                                gpui::rgba(0x00000018), // Subtle background
-                            ));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
+                for line in &visual_doc.lines {
+                    let overlap_start = start.max(line.global_start);
+                    let overlap_end = end.min(line.global_end);
 
-        // 2. Paint Selection
-        if let Some(cursor) = &self.cursor
-            && let Some(anchor) = cursor.anchor
-        {
-            let start = anchor.min(cursor.head);
-            let end = anchor.max(cursor.head);
-
-            for visual_line in visual_lines {
-                let overlap_start = start.max(visual_line.global_start);
-                let overlap_end = end.min(visual_line.global_end);
-
-                if overlap_start < overlap_end {
-                    let block = &self.blocks[visual_line.block_index];
-                    let rendered_start =
-                        block.source_to_rendered(overlap_start - block.global_start);
-                    let rendered_end = block.source_to_rendered(overlap_end - block.global_start);
-
-                    let local_start = visual_line.wrapped_line_start
-                        + (rendered_start - visual_line.rendered_local_start);
-                    let local_end = visual_line.wrapped_line_start
-                        + (rendered_end - visual_line.rendered_local_start);
-
-                    let x_start = visual_line.line.unwrapped_layout.x_for_index(local_start);
-                    let x_end = visual_line.line.unwrapped_layout.x_for_index(local_end);
-
-                    let selection_bounds = Bounds {
-                        origin: text_bounds.origin
-                            + Point {
-                                x: x_start,
-                                y: visual_line.y_offset,
-                            },
-                        size: gpui::size(x_end - x_start, visual_line.line_height),
-                    };
-
-                    window.paint_quad(gpui::fill(selection_bounds, self.selection_color));
-                }
-            }
-        }
-
-        // 2. Paint Text and Inline Math
-        for visual_line in visual_lines {
-            // Only paint the first row of each WrappedLine to avoid over-painting
-            if visual_line.local_row == 0 {
-                visual_line
-                    .line
-                    .paint(
-                        text_bounds.origin
-                            + Point {
-                                x: Pixels::ZERO,
-                                y: visual_line.y_offset,
-                            },
-                        visual_line.line_height,
-                        TextAlign::Left,
-                        None,
-                        window,
-                        cx,
-                    )
-                    .ok();
-            }
-
-            // Paint Inline Math SVGs
-            let block = &self.blocks[visual_line.block_index];
-            for deco in &block.inline_math {
-                let rendered_pos = block.source_to_rendered(deco.start);
-                if rendered_pos >= visual_line.rendered_local_start
-                    && rendered_pos < visual_line.global_end.saturating_sub(block.global_start)
-                {
-                    // This line contains the placeholder \u{FFFC}
-                    let local_offset =
-                        visual_line.wrapped_line_start + (rendered_pos - visual_line.rendered_local_start);
-                    let x = visual_line.line.unwrapped_layout.x_for_index(local_offset);
-
-                    if let Some(TypstAdapter::Rendered { svg }) = self.typst_cache.get(&deco.cache_key) {
-                        let svg_bounds = Bounds {
-                            origin: text_bounds.origin
-                                + Point {
-                                    x,
-                                    y: visual_line.y_offset + px(2.0), // Slight vertical alignment
-                                },
-                            size: gpui::size(px(40.0), visual_line.line_height - px(4.0)), // Placeholder size
+                    if overlap_start < overlap_end {
+                        // Very rough approximation for selection rectangles for now.
+                        // A true implementation needs to map global back to local for x_for_index.
+                        let rect = Bounds {
+                            origin: text_bounds.origin + line.bounds.origin,
+                            size: line.bounds.size,
                         };
-                        
-                        let _ = window.paint_svg(
-                            svg_bounds,
-                            svg.clone().into(),
-                            TransformationMatrix::default(),
-                            gpui::white(),
-                            cx,
-                        );
+                        window.paint_quad(gpui::fill(rect, self.selection_color));
                     }
+                }
+            }
+        }
+
+        // 2. Paint Text and Objects
+        for line in &visual_doc.lines {
+            // Paint text
+            let _ = line.wrapped_line.paint(
+                text_bounds.origin + line.bounds.origin,
+                line.bounds.size.height,
+                gpui::TextAlign::Left,
+                None,
+                window,
+                cx,
+            );
+
+            // Paint objects
+            for (obj, offset) in &line.objects {
+                if let Some(TypstAdapter::Rendered { svg }) = self.typst_cache.get(&obj.cache_key) {
+                    let svg_bounds = Bounds {
+                        origin: text_bounds.origin + line.bounds.origin + *offset,
+                        size: gpui::size(obj.width, obj.height),
+                    };
+                    
+                    let _ = window.paint_svg(
+                        svg_bounds,
+                        svg.clone().into(),
+                        gpui::TransformationMatrix::default(),
+                        gpui::white(),
+                        cx,
+                    );
                 }
             }
         }
 
         // 3. Paint Caret
-        if let Some(cursor) = &self.cursor
-            && self.cursor_visible
-        {
-            if let Some(visual_line_idx) = find_visual_line_ref(&visual_lines, cursor.head) {
-                let visual_line = &visual_lines[visual_line_idx];
-                let block = &self.blocks[visual_line.block_index];
-                let rendered_head = block.source_to_rendered(cursor.head - block.global_start);
-                let local_offset = visual_line.wrapped_line_start
-                    + (rendered_head - visual_line.rendered_local_start);
-
-                let x = visual_line.line.unwrapped_layout.x_for_index(local_offset);
-
-                let caret_bounds = Bounds {
-                    origin: text_bounds.origin
-                        + Point {
-                            x,
-                            y: visual_line.y_offset,
-                        },
-                    size: gpui::size(self.style.caret_width, visual_line.line_height),
-                };
-
-                window.paint_quad(gpui::fill(caret_bounds, self.cursor_color));
+        if let Some(cursor) = &self.cursor {
+            if self.cursor_visible {
+                for line in &visual_doc.lines {
+                    if cursor.head >= line.global_start && cursor.head <= line.global_end {
+                        let caret_bounds = Bounds {
+                            origin: text_bounds.origin + line.bounds.origin, // Simplified x pos
+                            size: gpui::size(self.style.caret_width, line.bounds.size.height),
+                        };
+                        window.paint_quad(gpui::fill(caret_bounds, self.cursor_color));
+                        break;
+                    }
+                }
             }
-        }
-
-        // 4. Handle Interactivity (Clicks and Drags)
-        if let Some(on_cursor_move) = &self.on_cursor_move {
-            let on_cursor_move = on_cursor_move.clone();
-            let visual_lines = visual_lines.clone();
-            let blocks = self.blocks.clone();
-
-            // Mouse Down: Set anchor and head
-            let on_cursor_move_down = on_cursor_move.clone();
-            let visual_lines_down = visual_lines.clone();
-            let blocks_down = blocks.clone();
-            window.on_mouse_event(
-                move |event: &MouseDownEvent, phase: DispatchPhase, window, cx| {
-                    if phase == DispatchPhase::Bubble && bounds.contains(&event.position) {
-                        let local_point = event.position - text_bounds.origin;
-                        if let Some(offset) =
-                            hit_test_visual_offset(&visual_lines_down, &blocks_down, local_point)
-                        {
-                            on_cursor_move_down(offset, event.modifiers.shift, window, cx);
-                        } else {
-                            let end = visual_lines_down.last().map_or(0, |l| l.global_end);
-                            on_cursor_move_down(end, event.modifiers.shift, window, cx);
-                        }
-                    }
-                },
-            );
-
-            // Mouse Move (Drag): Update head only
-            let on_cursor_move_drag = on_cursor_move.clone();
-            let visual_lines_drag = visual_lines.clone();
-            let blocks_drag = blocks.clone();
-            window.on_mouse_event(
-                move |event: &MouseMoveEvent, phase: DispatchPhase, window, cx| {
-                    if phase == DispatchPhase::Bubble
-                        && event.pressed_button == Some(MouseButton::Left)
-                    {
-                        let local_point = event.position - text_bounds.origin;
-                        if let Some(offset) =
-                            hit_test_visual_offset(&visual_lines_drag, &blocks_drag, local_point)
-                        {
-                            on_cursor_move_drag(offset, true, window, cx);
-                        } else if local_point.y < Pixels::ZERO {
-                            on_cursor_move_drag(0, true, window, cx);
-                        } else {
-                            let end = visual_lines_drag.last().map_or(0, |l| l.global_end);
-                            on_cursor_move_drag(end, true, window, cx);
-                        }
-                    }
-                },
-            );
         }
     }
 }
