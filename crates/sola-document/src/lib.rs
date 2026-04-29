@@ -530,6 +530,40 @@ impl DocumentModel {
         true
     }
 
+    pub fn toggle_checkbox(&mut self, global_offset: usize) -> bool {
+        if let Some((block_idx, local_offset)) = self.global_offset_to_block_local(global_offset) {
+            let block = &self.blocks[block_idx];
+            let text = block.draft.as_deref().unwrap_or(&block.source);
+            
+            if local_offset + 3 <= text.len() {
+                let checkbox = &text[local_offset..local_offset + 3];
+                let mut toggled = None;
+                if checkbox == "[ ]" {
+                    toggled = Some("[x]");
+                } else if checkbox == "[x]" || checkbox == "[X]" {
+                    toggled = Some("[ ]");
+                }
+                
+                if let Some(new_cb) = toggled {
+                    let new_text = format!("{}{}{}", &text[..local_offset], new_cb, &text[local_offset + 3..]);
+                    
+                    if block_idx == self.focused_block {
+                        self.set_focused_draft(new_text);
+                    } else {
+                        self.push_undo_snapshot();
+                        let block = &mut self.blocks[block_idx];
+                        block.source = new_text;
+                        block.rendered = render_block_source(&block.kind, &block.source);
+                        block.typst = typst_adapter_for_block(&block.kind, &block.rendered);
+                        self.rebuild_metadata();
+                    }
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn apply_focused_draft(&mut self) -> bool {
         let index = self.focused_block;
         let Some(block) = self.blocks.get(index) else {

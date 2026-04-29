@@ -40,6 +40,8 @@ pub struct Workspace {
     theme: Theme,
     theme_mode: ThemeMode,
     recent_paths: Vec<PathBuf>,
+    editor_line_height: f32,
+    editor_font_size: f32,
 }
 
 pub enum WorkspaceEvent {
@@ -66,6 +68,8 @@ impl Workspace {
             theme,
             theme_mode: config.theme_mode,
             recent_paths: config.recent_paths,
+            editor_line_height: config.editor_line_height,
+            editor_font_size: config.editor_font_size,
         }
     }
 
@@ -73,8 +77,31 @@ impl Workspace {
         let config = AppConfig {
             theme_mode: self.theme_mode,
             recent_paths: self.recent_paths.clone(),
+            editor_line_height: self.editor_line_height,
+            editor_font_size: self.editor_font_size,
         };
         let _ = config.save();
+    }
+
+    pub fn config(&self) -> AppConfig {
+        AppConfig {
+            theme_mode: self.theme_mode,
+            recent_paths: self.recent_paths.clone(),
+            editor_line_height: self.editor_line_height,
+            editor_font_size: self.editor_font_size,
+        }
+    }
+
+    pub fn set_editor_font_size(&mut self, size: f32, cx: &mut Context<Self>) {
+        self.editor_font_size = size.max(8.0).min(72.0);
+        self.save_config();
+        cx.notify();
+    }
+
+    pub fn set_editor_line_height(&mut self, height: f32, cx: &mut Context<Self>) {
+        self.editor_line_height = height.max(1.0).min(3.0);
+        self.save_config();
+        cx.notify();
     }
 
     pub fn worktree(&self) -> &Entity<Worktree> {

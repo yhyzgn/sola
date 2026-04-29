@@ -7,6 +7,8 @@ use std::path::PathBuf;
 pub struct AppConfig {
     pub theme_mode: ThemeMode,
     pub recent_paths: Vec<PathBuf>,
+    pub editor_line_height: f32,
+    pub editor_font_size: f32,
 }
 
 impl Default for AppConfig {
@@ -14,6 +16,8 @@ impl Default for AppConfig {
         Self {
             theme_mode: ThemeMode::Dark,
             recent_paths: Vec::new(),
+            editor_line_height: 1.2,
+            editor_font_size: 16.0,
         }
     }
 }
@@ -55,13 +59,17 @@ mod tests {
         let config = AppConfig {
             theme_mode: ThemeMode::Light,
             recent_paths: vec![PathBuf::from("/test/path")],
+            editor_font_size: 16.0,
+            editor_line_height: 1.2,
         };
         let toml_str = toml::to_string(&config).unwrap();
         assert!(toml_str.contains("theme_mode = \"Light\""));
         assert!(toml_str.contains("/test/path"));
+        assert!(toml_str.contains("editor_font_size = 16.0"));
 
         let decoded: AppConfig = toml::from_str(&toml_str).unwrap();
         assert_eq!(decoded.theme_mode, ThemeMode::Light);
         assert_eq!(decoded.recent_paths.len(), 1);
+        assert_eq!(decoded.editor_font_size, 16.0);
     }
 }

@@ -10,7 +10,7 @@ use crate::workspace::{Workspace, WorkspaceEvent};
 use crate::worktree::Worktree;
 use gpui::prelude::{FluentBuilder, StatefulInteractiveElement, Styled};
 use gpui::{
-    AppContext, Application, AsyncApp, Bounds, Context, Div, Entity, FocusHandle, FontWeight, Hsla,
+    App, AppContext, Application, AsyncApp, Bounds, Context, Div, Entity, FocusHandle, FontWeight, Hsla,
     InteractiveElement, IntoElement, KeyBinding, Menu, MenuItem, MouseButton,
     ParentElement, Render, WeakEntity, Window, WindowBounds, WindowOptions, div, px, rgb,
     size,
@@ -772,7 +772,10 @@ impl SolaRoot {
             return None;
         }
 
-        let theme = self.workspace.read(cx).theme().clone();
+        let (theme, config) = {
+            let workspace = self.workspace.read(cx);
+            (workspace.theme().clone(), workspace.config())
+        };
 
         Some(
             div()
@@ -875,11 +878,113 @@ impl SolaRoot {
                                 .flex()
                                 .flex_col()
                                 .gap(px(12.0))
+                                .child(section_title("EDITOR", &theme))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .justify_between()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .text_size(px(14.0))
+                                                .text_color(rgb_hex(&theme.palette.text_primary))
+                                                .child("Font Size"),
+                                        )
+                                        .child(self.adjustment_control(
+                                            format!("{:.1}px", config.editor_font_size),
+                                            &theme,
+                                            cx.listener(|this, _, _, cx| {
+                                                let current = this.workspace.read(cx).config().editor_font_size;
+                                                this.workspace.update(cx, |w, cx| w.set_editor_font_size(current - 1.0, cx));
+                                            }),
+                                            cx.listener(|this, _, _, cx| {
+                                                let current = this.workspace.read(cx).config().editor_font_size;
+                                                this.workspace.update(cx, |w, cx| w.set_editor_font_size(current + 1.0, cx));
+                                            }),
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .justify_between()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .text_size(px(14.0))
+                                                .text_color(rgb_hex(&theme.palette.text_primary))
+                                                .child("Line Height"),
+                                        )
+                                        .child(self.adjustment_control(
+                                            format!("{:.2}", config.editor_line_height),
+                                            &theme,
+                                            cx.listener(|this, _, _, cx| {
+                                                let current = this.workspace.read(cx).config().editor_line_height;
+                                                this.workspace.update(cx, |w, cx| w.set_editor_line_height(current - 0.05, cx));
+                                            }),
+                                            cx.listener(|this, _, _, cx| {
+                                                let current = this.workspace.read(cx).config().editor_line_height;
+                                                this.workspace.update(cx, |w, cx| w.set_editor_line_height(current + 0.05, cx));
+                                            }),
+                                        )),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap(px(12.0))
                                 .child(section_title("KEYBOARD SHORTCUTS", &theme))
                                 .child(shortcut_legend(&theme)),
                         ),
                 ),
         )
+    }
+
+    fn adjustment_control(
+        &self,
+        value: String,
+        theme: &Theme,
+        on_dec: impl Fn(&gpui::MouseDownEvent, &mut Window, &mut App) + 'static,
+        on_inc: impl Fn(&gpui::MouseDownEvent, &mut Window, &mut App) + 'static,
+    ) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(24.0))
+                    .rounded(px(4.0))
+                    .bg(rgb_hex(&theme.palette.panel_border))
+                    .text_color(rgb_hex(&theme.palette.text_primary))
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, on_dec)
+                    .child("-"),
+            )
+            .child(
+                div()
+                    .min_w(px(60.0))
+                    .text_align(gpui::TextAlign::Center)
+                    .text_size(px(13.0))
+                    .text_color(rgb_hex(&theme.palette.text_primary))
+                    .child(value),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(24.0))
+                    .rounded(px(4.0))
+                    .bg(rgb_hex(&theme.palette.panel_border))
+                    .text_color(rgb_hex(&theme.palette.text_primary))
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, on_inc)
+                    .child("+"),
+            )
     }
 
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> Div {
@@ -975,7 +1080,11 @@ impl SolaRoot {
         let document = active_doc_opt.unwrap();
         self.ensure_cursor_blink_loop(cx);
 
-        let editor_style = FocusedEditorStyle::from_theme(&theme);
+        let (editor_style, _config) = {
+            let workspace = self.workspace.read(cx);
+            let config = workspace.config();
+            (FocusedEditorStyle::from_theme(&theme, &config), config)
+        };
 
         let focused_block_idx = document.focused_block();
         let local_cursor = document.focused_cursor().cloned().unwrap_or_default();
@@ -1031,6 +1140,21 @@ impl SolaRoot {
                         });
                     });
                 });
+            }
+        })
+        .on_toggle_checkbox({
+            let on_cursor_handle = self.this_handle.clone();
+            move |global_offset, _window, cx| {
+                if let Some(this_handle) = &on_cursor_handle {
+                    let _ = this_handle.update(cx, |this, cx| {
+                        this.workspace.update(cx, |workspace, cx| {
+                            workspace.update_active_document(cx, |doc| {
+                                doc.toggle_checkbox(global_offset);
+                            });
+                        });
+                        cx.notify();
+                    });
+                }
             }
         });
 

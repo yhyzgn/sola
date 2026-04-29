@@ -10,51 +10,71 @@ pub const ROADMAP_PHASES: [&str; 5] = [
 ];
 
 pub fn sample_markdown() -> &'static str {
-    r#"# Sola
+    r##"# Sola Editor
 
-Sola is a GPU-accelerated Markdown editor focused on immersive writing and structured rendering.
+Sola is a **GPU-accelerated** Markdown editor focused on *immersive writing* and ~~structured~~ precise rendering.
 
-## Why this first prototype exists
+## 1. Typography & Inline Styles
 
-- establish a workspace-first Rust architecture
-- prove the GPUI application shell
-- prototype focused / blurred block rendering
+You can use **Bold**, *Italic*, or ***Bold Italic***.  
+~~Strikethrough~~ is also supported, as well as `inline code` for technical terms.
 
-> The document is the source, and the source is the document.
+Links like [Sola on GitHub](https://github.com/obra/sola) are rendered cleanly in Rich Mode.
+
+## 2. Lists & Task Management
+
+### Task List
+- [x] Implement Unified Canvas
+- [x] Smooth Source/Rich transition
+- [ ] Multi-format Export (PDF, Image)
+- [ ] File System Tree
+
+### Ordered List
+1. First priority item
+2. Second sequential task
+3. Third follow-up action
+
+### Unordered & Nested
+- Level 1 Item
+    - Nested Level 2
+    - Another Level 2
+- Back to Level 1
+
+## 3. Quotes & Code
+
+> "The document is the source, and the source is the document."
+> 
+> — Sola Philosophy
 
 ```rust
-fn focused_block() -> &'static str {
-    "render markdown source directly when editing"
+fn main() {
+    println!("Hello from Sola's Syntax Highlighter!");
+    let editor = "FocusedEditorElement";
 }
 ```
 
-### Next milestones
+## 4. Mathematics & Typst
 
-1. Tree-sitter highlighting
-2. Typst-powered formula rendering
-3. Offline export pipeline
+Inline math like $e^{i \pi} + 1 = 0$ is rendered via Typst.
 
-## HTML adapter sketch
-
-Inline safe HTML keeps structure instead of forcing a webview:
-<span style="color: #ff7a59; font-size: 18px">warm inline emphasis</span> remains stylable.
-
-Whitelisted images surface layout metadata for native rendering:
-<img src="architecture-sketch.png" alt="Architecture sketch" width="320" />
-
-## Typst previews
-
-Inline math should render inside paragraphs, like $e^(i pi) + 1 = 0$.
-
+Display math:
 $$
-sum_(i = 1)^n i = (n * (n + 1)) / 2
+\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}
 $$
 
 ```typst
-#set text(fill: blue)
+#set text(fill: rgb("#8b5cf6"))
 #align(center)[
-  *Typst block preview*
+  *This is a Typst-native block*
+  $ cal(A) = pi r^2 $
 ]
 ```
-"#
+
+## 5. HTML & Images
+
+<span style="color: #ff7a59; font-size: 18px">Warm inline emphasis</span> via HTML is supported.
+
+Images show placeholders with alt text:
+![Architecture of Sola](architecture-sketch.png)
+"##
 }

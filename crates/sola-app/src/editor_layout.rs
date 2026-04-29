@@ -7,7 +7,7 @@ pub struct VisualObject {
     pub global_offset: usize,
     pub width: Pixels,
     pub height: Pixels,
-    pub cache_key: String, // Used to lookup the SVG in the Typst cache
+    pub kind: crate::focused_editor::EditorObjectKind,
 }
 
 /// A single visually wrapped line of text, plus any objects that appear on this line.
@@ -84,20 +84,25 @@ pub fn layout_document(
 
                 // Find objects in this visual line
                 let mut objects = Vec::new();
-                for deco in &block.inline_math {
-                    let deco_rendered_start = block.source_to_rendered(deco.start);
+                for obj in &block.objects {
+                    let obj_rendered_start = block.source_to_rendered(obj.start);
                     // Check if the placeholder U+FFFC is in this line
-                    if deco_rendered_start >= text_start && deco_rendered_start < text_end {
-                        let x = line.unwrapped_layout.x_for_index(deco_rendered_start - block_rendered_base);
+                    if obj_rendered_start >= text_start && obj_rendered_start < text_end {
+                        let x = line.unwrapped_layout.x_for_index(obj_rendered_start - block_rendered_base);
                         
+                        let (width, height) = match &obj.kind {
+                            crate::focused_editor::EditorObjectKind::Math { .. } => (px(40.0), line_height - px(4.0)),
+                            crate::focused_editor::EditorObjectKind::Checkbox { .. } => (px(18.0), line_height),
+                        };
+
                         objects.push((
                             VisualObject {
-                                global_offset: block.global_start + deco.start,
-                                width: px(40.0), // Placeholder width for now
-                                height: line_height - px(4.0),
-                                cache_key: deco.cache_key.clone(),
+                                global_offset: block.global_start + obj.start,
+                                width,
+                                height,
+                                kind: obj.kind.clone(),
                             },
-                            Point { x, y: px(2.0) } // Relative to line bounds
+                            Point { x, y: px(0.0) } // Relative to line bounds
                         ));
                     }
                 }

@@ -65,9 +65,9 @@ pub struct FocusedEditorStyle {
 }
 
 impl FocusedEditorStyle {
-    pub fn from_theme(theme: &Theme) -> Self {
-        let font_size = px(theme.typography.code_size as f32);
-        let line_height = px(theme.typography.code_size as f32 * 1.35);
+    pub fn from_theme(_theme: &Theme, config: &crate::config::AppConfig) -> Self {
+        let font_size = px(config.editor_font_size);
+        let line_height = font_size * config.editor_line_height;
 
         Self {
             font_family: "JetBrains Mono",
@@ -100,6 +100,7 @@ pub struct FocusedEditorElement {
     accent_color: Hsla,
     code_bg_color: Hsla,
     on_cursor_move: Option<Arc<dyn Fn(usize, bool, &mut Window, &mut App) + Send + Sync>>,
+    on_toggle_checkbox: Option<Arc<dyn Fn(usize, &mut Window, &mut App) + Send + Sync>>,
 }
 
 impl FocusedEditorElement {
@@ -125,6 +126,7 @@ impl FocusedEditorElement {
             accent_color,
             code_bg_color,
             on_cursor_move: None,
+            on_toggle_checkbox: None,
         }
     }
 
@@ -135,13 +137,27 @@ impl FocusedEditorElement {
         self.on_cursor_move = Some(Arc::new(callback));
         self
     }
+
+    pub fn on_toggle_checkbox(
+        mut self,
+        callback: impl Fn(usize, &mut Window, &mut App) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_toggle_checkbox = Some(Arc::new(callback));
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
-pub struct InlineDecoration {
+pub struct EditorObject {
     pub start: usize,
     pub end: usize,
-    pub cache_key: String,
+    pub kind: EditorObjectKind,
+}
+
+#[derive(Clone, Debug)]
+pub enum EditorObjectKind {
+    Math { cache_key: String },
+    Checkbox { checked: bool },
 }
 
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
@@ -163,7 +179,7 @@ pub struct EditorBlock {
     pub mapping: Vec<MappingSegment>,
     pub is_focused: bool,
     pub kind: BlockKind,
-    pub inline_math: Vec<InlineDecoration>,
+    pub objects: Vec<EditorObject>,
 }
 
 impl EditorBlock {
@@ -172,12 +188,12 @@ impl EditorBlock {
             return source_local;
         }
 
-        // Check if we are inside an inline math decoration
-        for deco in &self.inline_math {
-            if source_local >= deco.start && source_local < deco.end {
-                // Find the mapping segment for this math block
+        // Check if we are inside an object
+        for obj in &self.objects {
+            if source_local >= obj.start && source_local < obj.end {
+                // Find the mapping segment for this object
                 for segment in &self.mapping {
-                    if segment.source_start == deco.start {
+                    if segment.source_start == obj.start {
                         return segment.rendered_start;
                     }
                 }
@@ -236,11 +252,17 @@ pub fn generate_editor_blocks(
     let focused_block_idx =
         global_cursor.and_then(|c| doc.global_offset_to_block_local(c).map(|(idx, _)| idx));
     let mut current_global = 0;
+    let mut current_list_index = 0;
 
     for (i, block) in doc.blocks().iter().enumerate() {
         let is_focused = focused_block_idx == Some(i);
 
-        let (text, font_size, line_height, runs, inline_math, mapping) = if is_focused {
+        // Reset list index if not in a continuous list
+        if !matches!(block.kind, BlockKind::ListItem { ordered: true }) {
+            current_list_index = 0;
+        }
+
+        let (text, font_size, line_height, runs, objects, mapping) = if is_focused {
             let highlighter = SyntaxHighlighter::new_rust();
             let spans = highlighter.highlight(&block.source);
             let runs = spans_to_runs(&spans, style, theme);
@@ -253,7 +275,9 @@ pub fn generate_editor_blocks(
                 Vec::new(),
             )
         } else {
-            generate_rich_text(&block.source, &block.kind, theme)
+            let (text, fs, lh, runs, objects, mapping, next_index) = generate_rich_text(&block.source, &block.kind, theme, current_list_index);
+            current_list_index = next_index;
+            (text, fs, lh, runs, objects, mapping)
         };
 
         let indentation = match &block.kind {
@@ -272,7 +296,7 @@ pub fn generate_editor_blocks(
             mapping,
             is_focused,
             kind: block.kind.clone(),
-            inline_math,
+            objects,
         });
 
         current_global += source_len + 2;
@@ -281,21 +305,133 @@ pub fn generate_editor_blocks(
     blocks
 }
 
+
 fn generate_rich_text(
     source: &str,
     kind: &BlockKind,
     theme: &Theme,
-) -> (String, Pixels, Pixels, Vec<TextRun>, Vec<InlineDecoration>, Vec<MappingSegment>) {
+    start_list_index: usize,
+) -> (String, Pixels, Pixels, Vec<TextRun>, Vec<EditorObject>, Vec<MappingSegment>, usize) {
     let mut text = String::new();
     let mut runs = Vec::new();
-    let mut inline_math = Vec::new();
+    let mut objects = Vec::new();
     let mut mapping = Vec::new();
+    let mut current_list_index = start_list_index;
+
+    // 1. Determine prefix to strip and visual marker to add
+    let mut source_prefix_len = 0;
+    let mut visual_marker = String::new();
+    let mut checkbox = None;
+    let marker_color = rgb_hex(&theme.palette.accent);
+
+    match kind {
+        BlockKind::Heading { .. } => {
+            let trimmed = source.trim_start();
+            let hashes = trimmed.chars().take_while(|c| *c == '#').count();
+            source_prefix_len = (source.len() - trimmed.len()) + hashes + if trimmed[hashes..].starts_with(' ') { 1 } else { 0 };
+        }
+        BlockKind::ListItem { ordered } => {
+            let trimmed = source.trim_start();
+            let mut internal_prefix = 0;
+            if *ordered {
+                if let Some(dot_pos) = trimmed.find(". ") {
+                    internal_prefix = dot_pos + 2;
+                    current_list_index += 1;
+                    visual_marker = format!("{}. ", current_list_index);
+                } else {
+                    // Fallback for malformed ordered list
+                    internal_prefix = trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
+                    if trimmed[internal_prefix..].starts_with('.') { internal_prefix += 1; }
+                    if trimmed[internal_prefix..].starts_with(' ') { internal_prefix += 1; }
+                    current_list_index += 1;
+                    visual_marker = format!("{}. ", current_list_index);
+                }
+            } else {
+                if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
+                    internal_prefix = 2;
+                    // Check for task list in the remaining part of the trimmed string
+                    let after_bullet = &trimmed[2..];
+                    if after_bullet.starts_with("[ ] ") {
+                        checkbox = Some(false);
+                        internal_prefix += 4;
+                    } else if after_bullet.starts_with("[x] ") || after_bullet.starts_with("[X] ") {
+                        checkbox = Some(true);
+                        internal_prefix += 4;
+                    } else {
+                        visual_marker = "• ".to_string();
+                    }
+                } else if trimmed.starts_with("-") || trimmed.starts_with("*") || trimmed.starts_with("+") {
+                    // Handle list marker without space
+                    internal_prefix = 1;
+                    visual_marker = "• ".to_string();
+                }
+            }
+            source_prefix_len = (source.len() - trimmed.len()) + internal_prefix;
+        }
+        BlockKind::Quote => {
+            let trimmed = source.trim_start();
+            source_prefix_len = (source.len() - trimmed.len()) + if trimmed.starts_with("> ") { 2 } else if trimmed.starts_with(">") { 1 } else { 0 };
+        }
+        _ => {}
+    }
+
+    // 2. Add visual marker or checkbox to the output
+    if let Some(checked) = checkbox {
+        mapping.push(MappingSegment { rendered_start: 0, source_start: 0 });
+        
+        objects.push(EditorObject {
+            start: (source.len() - source.trim_start().len()) + 2, // After bullet
+            end: source_prefix_len,
+            kind: EditorObjectKind::Checkbox { checked },
+        });
+
+        text.push('\u{FFFC}'); // Placeholder for checkbox
+        text.push(' ');
+        runs.push(TextRun {
+            len: '\u{FFFC}'.len_utf8() + 1,
+            font: Font {
+                family: "System UI".into(),
+                features: FontFeatures::default(),
+                fallbacks: None,
+                weight: FontWeight::BOLD,
+                style: FontStyle::default(),
+            },
+            color: marker_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+    } else if !visual_marker.is_empty() {
+        mapping.push(MappingSegment { rendered_start: 0, source_start: 0 });
+        text.push_str(&visual_marker);
+        runs.push(TextRun {
+            len: visual_marker.len(),
+            font: Font {
+                family: "System UI".into(),
+                features: FontFeatures::default(),
+                fallbacks: None,
+                weight: FontWeight::BOLD,
+                style: FontStyle::default(),
+            },
+            color: marker_color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        });
+    }
+
+    // 3. Parse the REST of the source
+    let stripped_source = if source_prefix_len < source.len() {
+        &source[source_prefix_len..]
+    } else {
+        ""
+    };
 
     let mut options = Options::empty();
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
     options.insert(Options::ENABLE_MATH);
-    let parser = Parser::new_ext(source, options).into_offset_iter();
+    let parser = Parser::new_ext(stripped_source, options).into_offset_iter();
 
     let mut current_weight;
     let mut current_style = FontStyle::default();
@@ -303,8 +439,7 @@ fn generate_rich_text(
     let mut current_color = rgb_hex(&theme.palette.text_primary);
     let mut is_strikethrough = false;
     let mut is_link = false;
-    let mut is_blockquote = false;
-    let mut list_index = 0;
+    let is_blockquote = matches!(kind, BlockKind::Quote);
 
     // Heading base styles
     let (size_mult, base_weight) = match kind {
@@ -312,10 +447,6 @@ fn generate_rich_text(
         BlockKind::Heading { level: 2 } => (1.5, FontWeight::BOLD),
         BlockKind::Heading { level: 3 } => (1.25, FontWeight::BOLD),
         BlockKind::Heading { .. } => (1.1, FontWeight::BOLD),
-        BlockKind::Quote => {
-            is_blockquote = true;
-            (1.0, FontWeight::NORMAL)
-        }
         _ => (1.0, FontWeight::NORMAL),
     };
     current_weight = base_weight;
@@ -328,6 +459,9 @@ fn generate_rich_text(
     let line_height = font_size * 1.5;
 
     for (event, range) in parser {
+        let global_range_start = source_prefix_len + range.start;
+        let global_range_end = source_prefix_len + range.end;
+
         match event {
             Event::Start(Tag::Strong) => current_weight = FontWeight::BOLD,
             Event::End(TagEnd::Strong) => current_weight = base_weight,
@@ -337,12 +471,16 @@ fn generate_rich_text(
             Event::End(TagEnd::Strikethrough) => is_strikethrough = false,
             Event::Start(Tag::Link { .. }) => is_link = true,
             Event::End(TagEnd::Link) => is_link = false,
-            Event::Start(Tag::Image { alt, .. }) => {
+            Event::Start(Tag::Image { title, .. }) => {
                 mapping.push(MappingSegment {
                     rendered_start: text.len(),
-                    source_start: range.start,
+                    source_start: global_range_start,
                 });
-                let label = format!("[Image: {}]", alt);
+                let label = if title.is_empty() {
+                    "[Image]".to_string()
+                } else {
+                    format!("[Image: {}]", title)
+                };
                 text.push_str(&label);
                 runs.push(TextRun {
                     len: label.len(),
@@ -359,39 +497,16 @@ fn generate_rich_text(
                     strikethrough: None,
                 });
             }
-            Event::End(TagEnd::Image) => {}
-            Event::TaskListMarker(checked) => {
-                let marker = if checked { "☑ " } else { "☐ " };
-                mapping.push(MappingSegment {
-                    rendered_start: text.len(),
-                    source_start: range.start,
-                });
-                text.push_str(marker);
-                runs.push(TextRun {
-                    len: marker.len(),
-                    font: Font {
-                        family: current_font_family.clone().into(),
-                        features: FontFeatures::default(),
-                        fallbacks: None,
-                        weight: current_weight,
-                        style: current_style,
-                    },
-                    color: rgb_hex(&theme.palette.accent),
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                });
-            }
             Event::InlineMath(t) => {
                 mapping.push(MappingSegment {
                     rendered_start: text.len(),
-                    source_start: range.start,
+                    source_start: global_range_start,
                 });
                 
-                inline_math.push(InlineDecoration {
-                    start: range.start,
-                    end: range.end,
-                    cache_key: format!("math::{}", t),
+                objects.push(EditorObject {
+                    start: global_range_start,
+                    end: global_range_end,
+                    kind: EditorObjectKind::Math { cache_key: format!("math::{}", t) },
                 });
                 
                 text.push('\u{FFFC}');
@@ -410,42 +525,10 @@ fn generate_rich_text(
                     strikethrough: None,
                 });
             }
-            Event::Start(Tag::Item) => {
-                mapping.push(MappingSegment {
-                    rendered_start: text.len(),
-                    source_start: range.start,
-                });
-                match kind {
-                    BlockKind::ListItem { ordered: true } => {
-                        list_index += 1;
-                        text.push_str(&format!("{}. ", list_index));
-                    }
-                    _ => text.push_str("• "),
-                }
-                let prefix_len = if matches!(kind, BlockKind::ListItem { ordered: true }) {
-                    format!("{}. ", list_index).len()
-                } else {
-                    "• ".len()
-                };
-                runs.push(TextRun {
-                    len: prefix_len,
-                    font: Font {
-                        family: current_font_family.clone().into(),
-                        features: FontFeatures::default(),
-                        fallbacks: None,
-                        weight: current_weight,
-                        style: current_style,
-                    },
-                    color: rgb_hex(&theme.palette.accent),
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                });
-            }
             Event::Code(c) => {
                 mapping.push(MappingSegment {
                     rendered_start: text.len(),
-                    source_start: range.start,
+                    source_start: global_range_start,
                 });
                 text.push_str(&c);
                 runs.push(TextRun {
@@ -466,7 +549,7 @@ fn generate_rich_text(
             Event::Text(t) => {
                 mapping.push(MappingSegment {
                     rendered_start: text.len(),
-                    source_start: range.start,
+                    source_start: global_range_start,
                 });
                 
                 text.push_str(&t);
@@ -529,9 +612,8 @@ fn generate_rich_text(
         });
     }
 
-    (text, font_size, line_height, runs, inline_math, mapping)
+    (text, font_size, line_height, runs, objects, mapping, current_list_index)
 }
-
 pub struct FocusedEditorState {
     pub(crate) visual_doc: VisualDocument,
 }
@@ -678,19 +760,61 @@ impl Element for FocusedEditorElement {
 
             // Paint objects
             for (obj, offset) in &line.objects {
-                if let Some(TypstAdapter::Rendered { svg }) = self.typst_cache.get(&obj.cache_key) {
-                    let svg_bounds = Bounds {
-                        origin: text_bounds.origin + line.bounds.origin + *offset,
-                        size: gpui::size(obj.width, obj.height),
-                    };
-                    
-                    let _ = window.paint_svg(
-                        svg_bounds,
-                        svg.clone().into(),
-                        gpui::TransformationMatrix::default(),
-                        gpui::white(),
-                        cx,
-                    );
+                let obj_bounds = Bounds {
+                    origin: text_bounds.origin + line.bounds.origin + *offset,
+                    size: gpui::size(obj.width, obj.height),
+                };
+
+                match &obj.kind {
+                    EditorObjectKind::Math { cache_key } => {
+                        if let Some(TypstAdapter::Rendered { svg }) = self.typst_cache.get(cache_key) {
+                            let _ = window.paint_svg(
+                                obj_bounds,
+                                svg.clone().into(),
+                                gpui::TransformationMatrix::default(),
+                                gpui::white(),
+                                cx,
+                            );
+                        }
+                    }
+                    EditorObjectKind::Checkbox { checked } => {
+                        let padding = px(2.0);
+                        let check_bounds = Bounds {
+                            origin: obj_bounds.origin + Point { x: padding, y: padding },
+                            size: gpui::size(obj_bounds.size.width - padding * 2.0, obj_bounds.size.height - padding * 2.0),
+                        };
+
+                        // Draw border (using accent color)
+                        window.paint_quad(gpui::fill(check_bounds, self.accent_color));
+                        
+                        // Draw inside (white)
+                        let inner_check_bounds = Bounds {
+                            origin: check_bounds.origin + Point { x: px(1.0), y: px(1.0) },
+                            size: gpui::size(check_bounds.size.width - px(2.0), check_bounds.size.height - px(2.0)),
+                        };
+                        window.paint_quad(gpui::fill(inner_check_bounds, gpui::white()));
+
+                        if *checked {
+                            // Draw a simple checkmark (filled box for now)
+                            let inner_padding = px(2.0);
+                            let mark_bounds = Bounds {
+                                origin: inner_check_bounds.origin + Point { x: inner_padding, y: inner_padding },
+                                size: gpui::size(inner_check_bounds.size.width - inner_padding * 2.0, inner_check_bounds.size.height - inner_padding * 2.0),
+                            };
+                            window.paint_quad(gpui::fill(mark_bounds, self.accent_color));
+                        }
+
+                        if let Some(on_toggle) = &self.on_toggle_checkbox {
+                            let on_toggle = on_toggle.clone();
+                            let global_offset = obj.global_offset;
+                            let bounds = check_bounds;
+                            window.on_mouse_event(move |event: &gpui::MouseDownEvent, phase, window, cx| {
+                                if phase == gpui::DispatchPhase::Bubble && bounds.contains(&event.position) {
+                                    on_toggle(global_offset, window, cx);
+                                }
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -727,16 +851,17 @@ impl IntoElement for FocusedEditorElement {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::AppConfig;
     use super::*;
     use sola_theme::Theme;
 
     #[test]
     fn editor_style_derives_compact_code_metrics_from_theme() {
-        let style = FocusedEditorStyle::from_theme(&Theme::sola_dark());
+        let style = FocusedEditorStyle::from_theme(&Theme::sola_dark(), &AppConfig::default());
 
         assert_eq!(style.font_family, "JetBrains Mono");
-        assert_eq!(style.font_size, px(14.0));
-        assert_eq!(style.line_height, px(18.9));
+        assert_eq!(style.font_size, px(16.0));
+        assert_eq!(style.line_height, px(19.2));
         assert_eq!(style.padding_x, px(40.0));
         assert_eq!(style.padding_y, px(20.0));
         assert_eq!(style.caret_width, px(2.0));
@@ -752,7 +877,7 @@ mod tests {
     fn test_editor_block_generation() {
         let doc = DocumentModel::from_markdown("# H1\n\nText");
         let theme = Theme::sola_dark();
-        let style = FocusedEditorStyle::from_theme(&theme);
+        let style = FocusedEditorStyle::from_theme(&theme, &AppConfig::default());
 
         // Cursor at 0 (inside H1), H1 is Source, Text is Rich
         let blocks = generate_editor_blocks(&doc, Some(0), &style, &theme);
@@ -780,7 +905,7 @@ mod tests {
             mapping: vec![],
             is_focused: true,
             kind: BlockKind::Heading { level: 1 },
-            inline_math: vec![],
+            objects: vec![],
         };
         assert_eq!(focused.rendered_to_source(2), 2);
         assert_eq!(focused.source_to_rendered(2), 2);
@@ -800,10 +925,10 @@ mod tests {
             ],
             is_focused: false,
             kind: BlockKind::Paragraph,
-            inline_math: vec![InlineDecoration {
+            objects: vec![EditorObject {
                 start: 6,
                 end: 14,
-                cache_key: "math::e=mc^2".into(),
+                kind: EditorObjectKind::Math { cache_key: "math::e=mc^2".into() },
             }],
         };
         // "Hello " (len 6) maps 1:1
@@ -826,7 +951,7 @@ mod tests {
         let source = "Hello $e=mc^2$ world";
         let doc = DocumentModel::from_markdown(source);
         let theme = Theme::sola_dark();
-        let style = FocusedEditorStyle::from_theme(&theme);
+        let style = FocusedEditorStyle::from_theme(&theme, &AppConfig::default());
         
         // global_cursor = None means no block is focused
         let blocks = generate_editor_blocks(&doc, None, &style, &theme);
@@ -836,8 +961,8 @@ mod tests {
         
         // Expected text: "Hello \u{FFFC} world"
         assert_eq!(block.text, "Hello \u{FFFC} world");
-        assert_eq!(block.inline_math.len(), 1);
-        assert_eq!(block.inline_math[0].start, 6); // "$" at index 6
-        assert_eq!(block.inline_math[0].end, 14); // after second "$"
+        assert_eq!(block.objects.len(), 1);
+        assert_eq!(block.objects[0].start, 6); // "$" at index 6
+        assert_eq!(block.objects[0].end, 14); // after second "$"
     }
 }
